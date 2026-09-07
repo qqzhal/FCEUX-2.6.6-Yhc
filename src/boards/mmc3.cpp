@@ -1075,149 +1075,58 @@ void Mapper194_Init(CartInfo *info) {
 }
 
 // ---------------------------- Mapper 195 -------------------------------
-// Waixing FS303: MMC3 clone. CHR registers <= 3 map to the 4KB CHR RAM,
-// everything else to CHR ROM (same logic as VirtuaNESex's Mapper195,
-// which runs the Captain Tsubasa 2 Chinese hacks correctly). CPU
-// $5000-$5FFF must be an independent 4KB PRG-RAM (VirtuaNESex maps it to
-// its own 8KB XRAM): the hacks copy a 12KB patch layer to $5000-$7FFF
-// AND write Chinese font tiles into CHR RAM through the CHR window - if
-// $5000-$5FFF aliases the CHR RAM both sides overwrite each other and
-// the game dies on a black screen.
-// The only other non-standard part is the PRG size: those hacks have
-// 160/192 8KB banks, so the bank mask must use the actual PRG size to
-// land the fixed banks on 158/159 (game.nes) or 190/191 (game2.nes)
-// instead of 62/63.
-static uint8 *M195_XRAM = NULL;	/* independent 4KB PRG-RAM at $5000-$5FFF */
-static uint32 M195_prgSize = 0;	/* actual PRG bytes, for diagnostics */
+// Waixing FS303 / Alien Technology (外星科技): MMC3 clone used by the
+// Captain Tsubasa 2 Chinese versions and their expanded hacks. Verified
+// against VirtuaNESex's Mapper195 and the working web/emu mapper195.js.
+//
+// 1. PRG: these ROMs have 160 (game.nes) / 192 (game2.nes) 8KB banks -
+//    NOT a power of two. fceux ANDs every bank number with PRGmask8[],
+//    which cannot express those sizes: with mask 159 (0x9F) a write of
+//    0x42 silently lands on 0x42 & 0x9F = 0x02, so the hacks' 12KB RAM
+//    patch layer ($5000-$7FFF) got copied from the wrong banks and the
+//    game crashed inside uninitialized RAM. Lift the mask to 0xFF and do
+//    explicit modulo + fixed-bank substitution in the pwrap hook instead
+//    (the web port uses value % prgCount; FixMMC3PRG passes ~1/~0 for the
+//    fixed $C000/$E000 banks).
+// 2. CHR: register values <= 3 map into a 4KB on-board CHR RAM window
+//    (VirtuaNESex SetBank_PPUSUB); everything else is CHR ROM. The hacks
+//    draw their Chinese font tiles through this RAM.
+// 3. CPU $5000-$5FFF is an independent 4KB PRG-RAM (VirtuaNES XRAM): the
+//    hacks copy their patch layer to $5000-$7FFF, so it must not alias
+//    WRAM or CHR RAM.
+// The scanline IRQ is register-compatible with MMC3; the stock fceux
+// GenMMC3 IRQ (GameHBIRQHook = MMC3_hb) works once the bank mapping is
+// correct, so no custom IRQ code here.
+static uint8 *M195_XRAM = NULL;		/* 4KB PRG-RAM at $5000-$5FFF */
+static uint32 M195_prgbanks = 64;	/* 8KB PRG bank count (any value, not just powers of 2) */
+static int M195_mirror = MI_H;		/* header mirroring (GenMMC3Power defaults to vertical) */
 
-/* ---- temporary diagnostics for the CT2 black screen (remove later) ---- */
-#include <stdarg.h>
-static FILE *M195_dbg = NULL;
-static int M195_dbgn = 0;
-static void M195Log(const char *fmt, ...) {
-	if (M195_dbgn > 80000) return;
-	if (!M195_dbg) M195_dbg = fopen("fceux195_debug.log", "ab");
-	if (!M195_dbg) return;
-	{ va_list ap; va_start(ap, fmt); vfprintf(M195_dbg, fmt, ap); va_end(ap); }
-	M195_dbgn++;
-	fflush(M195_dbg);
-}
-
-static int M195_chrlog = 0;
 static void M195CW(uint32 A, uint8 V) {
-	if (M195_chrlog < 1000 || !(M195_chrlog % 20)) M195Log("CHR A=%04X V=%02X PC=%04X\n", A, V, X.PC);
-	M195_chrlog++;
 	if (V <= 3)
-		setchr1r(0x10, A, V);
+		setchr1r(0x10, A, V);	/* on-board CHR RAM */
 	else
-		setchr1r(0, A, V);
+		setchr1r(0, A, V);	/* CHR ROM */
 }
 
-static int M195_prglog = 0;
 static void M195PW(uint32 A, uint8 V) {
-	if (M195_prglog < 4000 || !(M195_prglog % 20)) M195Log("PRG A=%04X V=%02X PC=%04X\n", A, V, X.PC);
-	M195_prglog++;
+	if (V == 0xFE)
+		V = M195_prgbanks - 2;	/* FixMMC3PRG: fixed $C000 bank */
+	else if (V == 0xFF)
+		V = M195_prgbanks - 1;	/* FixMMC3PRG: fixed $E000 bank */
+	else
+		V %= M195_prgbanks;	/* R6/R7 wrap at the real bank count */
 	setprg8(A, V);
 }
 
-static DECLFR(M195BR) {
-	static int r5n = 0;
-	if (r5n < 2000 || !(r5n % 200)) M195Log("R5 %04X PC=%04X\n", A, X.PC);
-	r5n++;
-	return CartBR(A);
-}
-
-static DECLFW(M195BW) {
-	static int w5n = 0;
-	if (w5n < 2000 || !(w5n % 200)) M195Log("W5 %04X=%02X PC=%04X\n", A, V, X.PC);
-	w5n++;
-	CartBW(A, V);
-}
-
-/* --- Mapper195 IRQ: exact port of VirtuaNESex Mapper195::HSync ---
-   scanline counter gated on display-on, scanlines 0-239 only, with its
-   own simplified counter/latch (no MMC3 reload semantics). The clock is
-   driven from MapIRQHook's scanline detector so it is NOT subject to
-   fceux's GameHBIRQHook gating ((PPU[0] & 0x38) != 0x18) which silently
-   disables the IRQ for certain pattern-table settings. */
-static uint8 M195_irq_counter = 0, M195_irq_latch = 0;
-static uint8 M195_irq_enable = 0, M195_irq_request = 0;
-static int M195_lastScan = -1;
-
-static void M195_HBClock(void) {
-	if (scanline < 0 || scanline > 239) return;
-	if (!(PPU[1] & 0x18)) return;	/* display off (VirtuaNES: IsDispON) */
-	if (!M195_irq_enable || M195_irq_request) return;
-
-	if (scanline == 0) {
-		if (M195_irq_counter) M195_irq_counter--;
-	}
-	M195_irq_counter--;
-	if (M195_irq_counter == 0xFF) {	/* wrapped: !(counter--) was true */
-		M195_irq_request = 0xFF;
-		M195_irq_counter = M195_irq_latch;
-		X6502_IRQBegin(FCEU_IQEXT);
-	}
-}
-
-static void M195_MapHook(int a) {
-	static uint32 ic = 0;
-	static uint16 lastBlk = 0xFFFF;
-	static uint8 seen[8192];	/* first-visit bitmap for 256-byte blocks */
-	/* scanline detector: clock the VirtuaNES-style IRQ once per scanline */
-	if (scanline != M195_lastScan) {
-		M195_lastScan = scanline;
-		M195_HBClock();
-	}
-	ic++;
-	uint16 blk = X.PC & 0xFF00;
-	if (blk != lastBlk) {
-		lastBlk = blk;
-		uint32 bi = blk >> 3;
-		if (!(seen[bi >> 3] & (0x80 >> (bi & 7)))) {
-			seen[bi >> 3] |= (0x80 >> (bi & 7));
-			M195Log("K PC=%04X A=%02X\n", X.PC, X.A);
-		}
-	}
-	if (ic == 1000000 || ic == 5000000 || ic == 15000000)
-		M195Log("I %u PC=%04X en=%d cnt=%d latch=%d\n", ic, X.PC,
-			M195_irq_enable, M195_irq_counter, M195_irq_latch);
-}
-/* ---- end diagnostics ---- */
-
-static DECLFW(M195IRQWrite) {
-	switch (A & 0xE001) {
-	case 0xC000: M195_irq_counter = V; break;
-	case 0xC001: M195_irq_latch = V; break;
-	case 0xE000: M195_irq_enable = 0; break;
-	case 0xE001: M195_irq_enable = 1; break;
-	}
-	M195_irq_request = 0;
-	MMC3_IRQWrite(A, V);
-}
-
 static void M195Power(void) {
-	M195Log("\n=== NEW RUN: M195Power ===\n");
-	M195_irq_counter = M195_irq_latch = M195_irq_enable = M195_irq_request = 0;
 	GenMMC3Power();
-	memset(CHRRAM, 0, CHRRAMSIZE);	/* VirtuaNES zeroes CRAM/WRAM at boot */
+	setmirror(M195_mirror);
+	memset(CHRRAM, 0, CHRRAMSIZE);	/* VirtuaNES zeroes CRAM/WRAM/XRAM at boot */
 	memset(WRAM, 0, WRAMSIZE);
+	memset(M195_XRAM, 0, 0x1000);
 	setprg4r(0x12, 0x5000, 0);
-	SetWriteHandler(0x5000, 0x5fff, M195BW);
-	SetReadHandler(0x5000, 0x5fff, M195BR);
-	SetWriteHandler(0xC000, 0xFFFF, M195IRQWrite);	/* track VirtuaNES-style IRQ regs */
-	/* dump what the fixed banks actually point at */
-	{
-		uint32 mask = PRGmask8[0];
-		M195Log("mask8=%d (fixed banks: C=%u E=%u of %u)\n",
-			mask, 0xFE & mask, 0xFF & mask, mask + 1);
-		if (ROM && M195_prgSize >= 16384) {
-			uint32 e = M195_prgSize;
-			M195Log("vectors NMI=%02X%02X RST=%02X%02X IRQ=%02X%02X (PRG=%u bytes)\n",
-				ROM[e - 6], ROM[e - 5], ROM[e - 4], ROM[e - 3],
-				ROM[e - 2], ROM[e - 1], e);
-		}
-	}
+	SetWriteHandler(0x5000, 0x5FFF, CartBW);
+	SetReadHandler(0x5000, 0x5FFF, CartBR);
 }
 
 static void M195Close(void) {
@@ -1229,48 +1138,33 @@ static void M195Close(void) {
 }
 
 void Mapper195_Init(CartInfo *info) {
-	/* CartInfo.PRGRomSize holds the power-of-2 padded size for iNES 1.0
-	   (ines.cpp overwrites it from ROM_size right before the CRC32 calc).
-	   CartInfo.totalFileSize is the file size WITHOUT the 16-byte header
-	   (confirmed by diagnostics: game.nes reports 1572864 = 1572880-16),
-	   so the real PRG size = totalFileSize - CHR (trainer, if any, breaks
-	   16KB alignment and falls back below). */
-	int prgbytes = (int)(info->totalFileSize - (uint32)VROM_size * 8192);
-	if (prgbytes < 512 * 1024 || prgbytes > 8192 * 1024 || (prgbytes & 0x3FFF))
-		prgbytes = info->PRGRomSize;	/* implausible: keep header value */
-	if (prgbytes < 512 * 1024)
-		prgbytes = 512 * 1024;	/* fallback to standard FS303 */
-	int prgkb = prgbytes >> 10;
+	/* 195 is in ines.cpp's not_power2 list, so CartInfo.PRGRomSize holds
+	   the actual (non rounded-up) PRG byte size. Fall back to 512KB
+	   (standard FS303) if it looks implausible for this board. */
+	int prgbytes = info->PRGRomSize;
+	if (prgbytes < 512 * 1024 || prgbytes > 4096 * 1024 || (prgbytes & 0x3FFF))
+		prgbytes = 512 * 1024;
+	M195_prgbanks = prgbytes >> 13;
+	M195_mirror = info->mirror;
+
 	GenMMC3_Init(info, 512, 256, 16, info->battery);
-	/* GenMMC3_Init's mask math treats its KB parameter as bytes:
-	   (prg >> 13) - 1 underflows to -1 for every KB-sized value, leaving
-	   the uppow2-padded mask in place (255 for a 2MB buffer). Set the
-	   real masks from the actual PRG size in bytes instead. */
-	PRGmask8[0] &= (prgbytes >> 13) - 1;
-	PRGmask16[0] &= (prgbytes >> 14) - 1;
-	PRGmask32[0] &= (prgbytes >> 15) - 1;
+	/* GenMMC3_Init clamps PRGmask8 to its 512KB parameter; lift it so the
+	   modulo bank numbers from M195PW survive setprg8()'s AND. */
+	PRGmask8[0] = 0xFF;
 	pwrap = M195PW;
 	cwrap = M195CW;
 	info->Power = M195Power;
 	info->Close = M195Close;
-	/* IRQ clocked from MapIRQHook scanline detector (VirtuaNES style) */
-	PPU_hook = 0;
-	MapIRQHook = M195_MapHook;
-	M195_prgSize = prgbytes;
+
 	CHRRAMSIZE = 4096;
 	CHRRAM = (uint8*)FCEU_gmalloc(CHRRAMSIZE);
 	SetupCartCHRMapping(0x10, CHRRAM, CHRRAMSIZE, 1);
 	AddExState(CHRRAM, CHRRAMSIZE, 0, "CHRR");
-	AddExState(&M195_irq_counter, 1, 0, "M5IC");
-	AddExState(&M195_irq_latch, 1, 0, "M5IL");
-	AddExState(&M195_irq_enable, 1, 0, "M5IE");
-	AddExState(&M195_irq_request, 1, 0, "M5IR");
+
 	M195_XRAM = (uint8*)FCEU_gmalloc(0x1000);
 	memset(M195_XRAM, 0, 0x1000);
 	SetupCartPRGMapping(0x12, M195_XRAM, 0x1000, 1);
 	AddExState(M195_XRAM, 0x1000, 0, "M5KX");
-	M195Log("=== Mapper195_Init: totalFileSize=%u VROM=%dKB prgbytes=%d prgkb=%d ===\n",
-		(unsigned)info->totalFileSize, VROM_size * 8, prgbytes, prgkb);
 }
 
 // ---------------------------- Mapper 196 -------------------------------

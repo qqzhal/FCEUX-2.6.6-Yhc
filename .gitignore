@@ -47,3 +47,4 @@ fceux-net-server
 
 # typical CMake build directory
 /build
+testrun/
