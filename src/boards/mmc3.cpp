@@ -1177,7 +1177,14 @@ void Mapper195_Init(CartInfo *info) {
 	if (prgbytes < 512 * 1024)
 		prgbytes = 512 * 1024;	/* fallback to standard FS303 */
 	int prgkb = prgbytes >> 10;
-	GenMMC3_Init(info, prgkb, 256, 16, info->battery);
+	GenMMC3_Init(info, 512, 256, 16, info->battery);
+	/* GenMMC3_Init's mask math treats its KB parameter as bytes:
+	   (prg >> 13) - 1 underflows to -1 for every KB-sized value, leaving
+	   the uppow2-padded mask in place (255 for a 2MB buffer). Set the
+	   real masks from the actual PRG size in bytes instead. */
+	PRGmask8[0] &= (prgbytes >> 13) - 1;
+	PRGmask16[0] &= (prgbytes >> 14) - 1;
+	PRGmask32[0] &= (prgbytes >> 15) - 1;
 	pwrap = M195PW;
 	cwrap = M195CW;
 	info->Power = M195Power;
