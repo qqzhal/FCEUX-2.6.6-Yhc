@@ -531,7 +531,7 @@ typedef struct {
 // to something more unified for ines 2.0 specific
 static int not_power2[] =
 {
-	53, 195, 198, 228, 547
+	53, 198, 228, 547
 };
 
 BMAPPINGLocal bmap[] = {
@@ -1254,12 +1254,6 @@ int iNESLoad(const char* name, FCEUFILE* fp, int OverwriteVidMode) {
 	ROM_size = rom_size_bytes >> 14;
 	Temp_Rom_Size = ROM_size;
 	VROM_size = vrom_size_bytes >> 13;
-
-	/* iNES 1.0: expose the actual (pre-uppow2) PRG size to board inits,
-	   e.g. Mapper195 needs it for its PRG bank mask (NES 2.0 sets this
-	   further down in its own branch) */
-	if (!iNES2)
-		iNESCart.PRGRomSize = not_round_size;
 
 	ROM = (uint8*)FCEU_malloc(rom_size_bytes);
 	memset(ROM, 0xFF, rom_size_bytes);

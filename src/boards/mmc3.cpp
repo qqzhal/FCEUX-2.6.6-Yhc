@@ -1188,12 +1188,14 @@ static void M195Close(void) {
 }
 
 void Mapper195_Init(CartInfo *info) {
-	/* 195 is in ines.cpp's not_power2 list, so CartInfo.PRGRomSize holds
-	   the actual (non rounded-up) PRG byte size. Fall back to 512KB
-	   (standard FS303) if it looks implausible for this board. */
-	int prgbytes = info->PRGRomSize;
+	/* CartInfo.PRGRomSize is the power-of-2 padded size for iNES 1.0
+	   (ines.cpp line ~1362 overwrites it from the padded ROM_size AFTER any
+	   earlier fixup), so derive the real PRG size from totalFileSize
+	   (= file size minus the 16-byte header) minus CHR. Trainer bits, if
+	   any, break the 16KB alignment check and fall back below. */
+	int prgbytes = (int)(info->totalFileSize - (uint32)VROM_size * 8192);
 	if (prgbytes < 512 * 1024 || prgbytes > 4096 * 1024 || (prgbytes & 0x3FFF))
-		prgbytes = 512 * 1024;
+		prgbytes = 512 * 1024;	/* implausible: standard FS303 fallback */
 	M195_prgbanks = prgbytes >> 13;
 	M195_mirror = info->mirror;
 
