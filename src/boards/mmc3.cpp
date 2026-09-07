@@ -1089,27 +1089,72 @@ void Mapper194_Init(CartInfo *info) {
 // instead of 62/63.
 static uint8 *M195_XRAM = NULL;	/* independent 4KB PRG-RAM at $5000-$5FFF */
 
+/* ---- temporary diagnostics for the CT2 black screen (remove later) ---- */
+#include <stdarg.h>
+static FILE *M195_dbg = NULL;
+static int M195_dbgn = 0;
+static void M195Log(const char *fmt, ...) {
+	if (M195_dbgn > 8000) return;
+	if (!M195_dbg) M195_dbg = fopen("fceux195_debug.log", "ab");
+	if (!M195_dbg) return;
+	{ va_list ap; va_start(ap, fmt); vfprintf(M195_dbg, fmt, ap); va_end(ap); }
+	M195_dbgn++;
+	fflush(M195_dbg);
+}
+
 static void M195CW(uint32 A, uint8 V) {
-	if (V <= 3)	// Crystalis (c).nes, Captain Tsubasa Vol 2 - Super Striker (C)
+	if (M195_dbgn < 600) M195Log("CHR A=%04X V=%02X\n", A, V);
+	if (V <= 3)
 		setchr1r(0x10, A, V);
 	else
 		setchr1r(0, A, V);
 }
 
 static void M195PW(uint32 A, uint8 V) {
-	/* full 8-bit bank number: GENPWRAP truncates to 7 bits (V & 0x7F),
-	   which would land the fixed banks (0xFE/0xFF) on 126/127 instead of
-	   the real last banks 158/159 (game.nes) or 190/191 (game2.nes);
-	   setprg8r still applies PRGmask8 derived from the actual PRG size.
-	   Same approach as Mapper198's M198PW. */
+	if (M195_dbgn < 600) M195Log("PRG A=%04X V=%02X\n", A, V);
 	setprg8(A, V);
 }
 
+static DECLFR(M195BR) {
+	if (M195_dbgn < 1000) M195Log("R5 %04X\n", A);
+	return CartBR(A);
+}
+
+static DECLFW(M195BW) {
+	if (M195_dbgn < 1000) M195Log("W5 %04X=%02X\n", A, V);
+	CartBW(A, V);
+}
+
+static void M195_HB(void) {
+	static int hb = 0;
+	if (!(hb % 6000)) M195Log("HB %d PC=%04X PPUon=%d\n", hb, X.PC, PPU[0] & 0x18);
+	hb++;
+	MMC3_hb();
+}
+/* ---- end diagnostics ---- */
+
 static void M195Power(void) {
+	M195Log("\n=== NEW RUN: M195Power ===\n");
 	GenMMC3Power();
+	memset(CHRRAM, 0, CHRRAMSIZE);	/* VirtuaNES zeroes CRAM/WRAM at boot */
+	memset(WRAM, 0, WRAMSIZE);
 	setprg4r(0x12, 0x5000, 0);
-	SetWriteHandler(0x5000, 0x5fff, CartBW);
-	SetReadHandler(0x5000, 0x5fff, CartBR);
+	SetWriteHandler(0x5000, 0x5fff, M195BW);
+	SetReadHandler(0x5000, 0x5fff, M195BR);
+	/* dump what the fixed banks actually point at */
+	{
+		uint8 *pC = FCEU_GetPageAddress(0xC000);
+		uint8 *pE = FCEU_GetPageAddress(0xE000);
+		M195Log("mask8=%d ROM=%p C000->%+ld E000->%+ld\n",
+			PRGmask8[0], (void*)ROM,
+			pC ? (long)(pC - ROM) : -1L, pE ? (long)(pE - ROM) : -1L);
+		if (ROM && iNESCart.PRGRomSize >= 16384) {
+			uint32 e = iNESCart.PRGRomSize;
+			M195Log("vectors NMI=%02X%02X RST=%02X%02X IRQ=%02X%02X (PRGRomSize=%u)\n",
+				ROM[e - 6], ROM[e - 5], ROM[e - 4], ROM[e - 3],
+				ROM[e - 2], ROM[e - 1], e);
+		}
+	}
 }
 
 static void M195Close(void) {
@@ -1129,13 +1174,17 @@ void Mapper195_Init(CartInfo *info) {
 	cwrap = M195CW;
 	info->Power = M195Power;
 	info->Close = M195Close;
+	GameHBIRQHook = M195_HB;
 	CHRRAMSIZE = 4096;
 	CHRRAM = (uint8*)FCEU_gmalloc(CHRRAMSIZE);
 	SetupCartCHRMapping(0x10, CHRRAM, CHRRAMSIZE, 1);
 	AddExState(CHRRAM, CHRRAMSIZE, 0, "CHRR");
 	M195_XRAM = (uint8*)FCEU_gmalloc(0x1000);
+	memset(M195_XRAM, 0, 0x1000);
 	SetupCartPRGMapping(0x12, M195_XRAM, 0x1000, 1);
 	AddExState(M195_XRAM, 0x1000, 0, "M5KX");
+	M195Log("=== Mapper195_Init: PRGRomSize=%uKB prgkb=%d ===\n",
+		info->PRGRomSize >> 10, prgkb);
 }
 
 // ---------------------------- Mapper 196 -------------------------------
