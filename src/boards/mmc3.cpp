@@ -1077,10 +1077,18 @@ void Mapper194_Init(CartInfo *info) {
 // ---------------------------- Mapper 195 -------------------------------
 // Waixing FS303: MMC3 clone. CHR registers <= 3 map to the 4KB CHR RAM,
 // everything else to CHR ROM (same logic as VirtuaNESex's Mapper195,
-// which runs the Captain Tsubasa 2 Chinese hacks correctly). The only
-// non-standard part is the PRG size: those hacks have 160/192 8KB banks,
-// so the bank mask must use the actual PRG size to land the fixed banks
-// on 158/159 (game.nes) or 190/191 (game2.nes) instead of 62/63.
+// which runs the Captain Tsubasa 2 Chinese hacks correctly). CPU
+// $5000-$5FFF must be an independent 4KB PRG-RAM (VirtuaNESex maps it to
+// its own 8KB XRAM): the hacks copy a 12KB patch layer to $5000-$7FFF
+// AND write Chinese font tiles into CHR RAM through the CHR window - if
+// $5000-$5FFF aliases the CHR RAM both sides overwrite each other and
+// the game dies on a black screen.
+// The only other non-standard part is the PRG size: those hacks have
+// 160/192 8KB banks, so the bank mask must use the actual PRG size to
+// land the fixed banks on 158/159 (game.nes) or 190/191 (game2.nes)
+// instead of 62/63.
+static uint8 *M195_XRAM = NULL;	/* independent 4KB PRG-RAM at $5000-$5FFF */
+
 static void M195CW(uint32 A, uint8 V) {
 	if (V <= 3)	// Crystalis (c).nes, Captain Tsubasa Vol 2 - Super Striker (C)
 		setchr1r(0x10, A, V);
@@ -1090,9 +1098,17 @@ static void M195CW(uint32 A, uint8 V) {
 
 static void M195Power(void) {
 	GenMMC3Power();
-	setprg4r(0x10, 0x5000, 2);
+	setprg4r(0x12, 0x5000, 0);
 	SetWriteHandler(0x5000, 0x5fff, CartBW);
 	SetReadHandler(0x5000, 0x5fff, CartBR);
+}
+
+static void M195Close(void) {
+	if (M195_XRAM) {
+		FCEU_gfree(M195_XRAM);
+		M195_XRAM = NULL;
+	}
+	GenMMC3Close();
 }
 
 void Mapper195_Init(CartInfo *info) {
@@ -1102,10 +1118,14 @@ void Mapper195_Init(CartInfo *info) {
 	GenMMC3_Init(info, prgkb, 256, 16, info->battery);
 	cwrap = M195CW;
 	info->Power = M195Power;
+	info->Close = M195Close;
 	CHRRAMSIZE = 4096;
 	CHRRAM = (uint8*)FCEU_gmalloc(CHRRAMSIZE);
 	SetupCartCHRMapping(0x10, CHRRAM, CHRRAMSIZE, 1);
 	AddExState(CHRRAM, CHRRAMSIZE, 0, "CHRR");
+	M195_XRAM = (uint8*)FCEU_gmalloc(0x1000);
+	SetupCartPRGMapping(0x12, M195_XRAM, 0x1000, 1);
+	AddExState(M195_XRAM, 0x1000, 0, "M5KX");
 }
 
 // ---------------------------- Mapper 196 -------------------------------
