@@ -1,0 +1,28 @@
+name: Windows Build
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  win64:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build fceux64 (Release x64)
+        shell: cmd
+        run: msbuild vc\vc14_fceux.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m /nologo /v:m
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fceux-win64
+          path: |
+            vc/x64/Release/fceux64.exe
+            src/drivers/win/lua/x64/lua5.1.dll
+            src/auxlib.lua
