@@ -1166,13 +1166,16 @@ static void M195_HB(void) {
 
 static void M195_MapHook(int a) {
 	static uint32 ic = 0;
+	static uint16 lastBlk = 0xFFFF;
 	ic++;
-	if (ic < 20000) {
-		if (!(ic % 250)) M195Log("I %u PC=%04X A=%02X\n", ic, X.PC, X.A);
-	} else if (!(ic % 100000)) {
-		M195Log("I %u PC=%04X A=%02X en=%d cnt=%d\n", ic, X.PC, X.A,
-			M195_irq_enable, M195_irq_counter);
+	uint16 blk = X.PC & 0xFF00;
+	if (blk != lastBlk) {
+		lastBlk = blk;
+		if (M195_dbgn < 70000) M195Log("K PC=%04X A=%02X\n", X.PC, X.A);
 	}
+	if (ic == 1000000 || ic == 5000000 || ic == 15000000)
+		M195Log("I %u PC=%04X en=%d cnt=%d latch=%d\n", ic, X.PC,
+			M195_irq_enable, M195_irq_counter, M195_irq_latch);
 }
 /* ---- end diagnostics ---- */
 
