@@ -1147,7 +1147,7 @@ static void M195_HB(void) {
 	static int hb = 0;
 	hb++;
 	if (!(hb % 1310)) M195Log("HB %d PC=%04X PPUon=%d ScreenON=%d en=%d cnt=%d latch=%d\n",
-		hb, X.PC, PPU[0] & 0x18, (int)ScreenON, M195_irq_enable, M195_irq_counter, M195_irq_latch);
+		hb, X.PC, PPU[0] & 0x18, (int)(PPU[1] & 0x18), M195_irq_enable, M195_irq_counter, M195_irq_latch);
 
 	if (scanline < 0 || scanline > 239) return;
 	if (!(PPU[0] & 0x18)) return;	/* display off */
