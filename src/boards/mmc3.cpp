@@ -1101,7 +1101,23 @@ static uint8 *M195_XRAM = NULL;		/* 4KB PRG-RAM at $5000-$5FFF */
 static uint32 M195_prgbanks = 64;	/* 8KB PRG bank count (any value, not just powers of 2) */
 static int M195_mirror = MI_H;		/* header mirroring (GenMMC3Power defaults to vertical) */
 
+/* ---- temporary diagnostics for the CT2 black screen (remove later) ---- */
+#include <stdarg.h>
+static FILE *M195_dbg = NULL;
+static int M195_dbgn = 0;
+static void M195Log(const char *fmt, ...) {
+	if (M195_dbgn > 120000) return;
+	if (!M195_dbg) M195_dbg = fopen("fceux195_debug.log", "ab");
+	if (!M195_dbg) return;
+	{ va_list ap; va_start(ap, fmt); vfprintf(M195_dbg, fmt, ap); va_end(ap); }
+	M195_dbgn++;
+	if (!(M195_dbgn & 255)) fflush(M195_dbg);
+}
+
 static void M195CW(uint32 A, uint8 V) {
+	static int clog = 0;
+	if (clog < 300 || !(clog % 50)) M195Log("CHR A=%04X V=%02X PC=%04X sl=%d\n", A, V, X.PC, scanline);
+	clog++;
 	if (V <= 3)
 		setchr1r(0x10, A, V);	/* on-board CHR RAM */
 	else
@@ -1109,14 +1125,45 @@ static void M195CW(uint32 A, uint8 V) {
 }
 
 static void M195PW(uint32 A, uint8 V) {
+	static int plog = 0;
+	uint8 old = V;
 	if (V == 0xFE)
 		V = M195_prgbanks - 2;	/* FixMMC3PRG: fixed $C000 bank */
 	else if (V == 0xFF)
 		V = M195_prgbanks - 1;	/* FixMMC3PRG: fixed $E000 bank */
 	else
 		V %= M195_prgbanks;	/* R6/R7 wrap at the real bank count */
+	if (plog < 300 || !(plog % 50)) M195Log("PRG A=%04X %02X->%02X PC=%04X\n", A, old, V, X.PC);
+	plog++;
 	setprg8(A, V);
 }
+
+static DECLFW(M195IRQTrace) {
+	static int ilog = 0;
+	if (ilog < 300 || !(ilog % 50)) M195Log("IRQW A=%04X V=%02X PC=%04X\n", A, V, X.PC);
+	ilog++;
+	MMC3_IRQWrite(A, V);
+}
+
+static void M195_MapHook(int a) {
+	static uint32 ic = 0;
+	static uint16 lastBlk = 0xFFFF;
+	static uint8 seen[8192];	/* first-visit bitmap for 256-byte blocks */
+	ic++;
+	uint16 blk = X.PC & 0xFF00;
+	if (blk != lastBlk) {
+		lastBlk = blk;
+		uint32 bi = blk >> 3;
+		if (!(seen[bi >> 3] & (0x80 >> (bi & 7)))) {
+			seen[bi >> 3] |= (0x80 >> (bi & 7));
+			M195Log("K PC=%04X A=%02X sl=%d\n", X.PC, X.A, scanline);
+		}
+	}
+	if (ic == 300000 || ic == 1000000 || ic == 3000000 || ic == 8000000)
+		M195Log("I %u PC=%04X PPU0=%02X PPU1=%02X IRQc=%d IRQl=%d IRQa=%d sl=%d\n", ic, X.PC,
+			PPU[0], PPU[1], IRQCount, IRQLatch, IRQa, scanline);
+}
+/* ---- end diagnostics ---- */
 
 static void M195Power(void) {
 	GenMMC3Power();
@@ -1127,6 +1174,9 @@ static void M195Power(void) {
 	setprg4r(0x12, 0x5000, 0);
 	SetWriteHandler(0x5000, 0x5FFF, CartBW);
 	SetReadHandler(0x5000, 0x5FFF, CartBR);
+	SetWriteHandler(0xC000, 0xFFFF, M195IRQTrace);
+	MapIRQHook = M195_MapHook;
+	M195Log("\n=== NEW RUN: banks=%u mirror=%d ===\n", M195_prgbanks, M195_mirror);
 }
 
 static void M195Close(void) {
