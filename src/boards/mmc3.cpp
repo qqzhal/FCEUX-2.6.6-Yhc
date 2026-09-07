@@ -1126,11 +1126,34 @@ static DECLFW(M195BW) {
 	CartBW(A, V);
 }
 
+/* --- Mapper195 IRQ: exact port of VirtuaNESex Mapper195::HSync ---
+   scanline counter gated on display-on, scanlines 0-239 only, with its
+   own simplified counter/latch (no MMC3 reload semantics). fceux's MMC3
+   IRQ structures (ClockMMC3Counter etc.) have different reload/timing
+   behavior that hangs this game's IRQ-driven init inside its handler. */
+static uint8 M195_irq_counter = 0, M195_irq_latch = 0;
+static uint8 M195_irq_enable = 0, M195_irq_request = 0;
+
 static void M195_HB(void) {
+	/* diagnostics sampler (cheap, keep while debugging) */
 	static int hb = 0;
 	hb++;
-	if (!(hb % 1310)) M195Log("HB %d PC=%04X PPUon=%d IRQa=%d cnt=%d latch=%d\n",
-		hb, X.PC, PPU[0] & 0x18, IRQa, IRQCount, IRQLatch);
+	if (!(hb % 1310)) M195Log("HB %d PC=%04X PPUon=%d en=%d cnt=%d latch=%d\n",
+		hb, X.PC, PPU[0] & 0x18, M195_irq_enable, M195_irq_counter, M195_irq_latch);
+
+	if (scanline < 0 || scanline > 239) return;
+	if (!(PPU[0] & 0x18)) return;	/* display off */
+	if (!M195_irq_enable || M195_irq_request) return;
+
+	if (scanline == 0) {
+		if (M195_irq_counter) M195_irq_counter--;
+	}
+	M195_irq_counter--;
+	if (M195_irq_counter == 0xFF) {	/* wrapped: !(counter--) was true */
+		M195_irq_request = 0xFF;
+		M195_irq_counter = M195_irq_latch;
+		X6502_IRQBegin(FCEU_IQEXT);
+	}
 }
 
 static void M195_MapHook(int a) {
@@ -1139,38 +1162,33 @@ static void M195_MapHook(int a) {
 	if (ic < 20000) {
 		if (!(ic % 250)) M195Log("I %u PC=%04X A=%02X\n", ic, X.PC, X.A);
 	} else if (!(ic % 100000)) {
-		M195Log("I %u PC=%04X A=%02X\n", ic, X.PC, X.A);
+		M195Log("I %u PC=%04X A=%02X en=%d cnt=%d\n", ic, X.PC, X.A,
+			M195_irq_enable, M195_irq_counter);
 	}
-}
-
-/* Standard MMC3 IRQ: clock the counter on the PPU A12 rising edge
-   (CHR fetches crossing $0FFF/$1000). fceux's GameHBIRQHook is gated by
-   (PPU[0] & 0x38) != 0x18 in ppu.cpp, so with certain pattern-table
-   settings it never fires and games waiting for the IRQ hang on a black
-   screen; the A12 hook matches the real hardware instead. */
-static int M195_lastA12 = 0;
-static void M195_PPUHook(uint32 A) {
-	if (A < 0x2000) {
-		int a12 = (A >> 12) & 1;
-		if (a12 && !M195_lastA12)
-			ClockMMC3Counter();
-		M195_lastA12 = a12;
-	}
-	static uint32 ph = 0;
-	if (!(++ph % 200000)) M195Log("PPU %u PC=%04X IRQa=%d cnt=%d latch=%d PPUon=%d\n",
-		ph, X.PC, IRQa, IRQCount, IRQLatch, PPU[0] & 0x18);
 }
 /* ---- end diagnostics ---- */
 
+static DECLFW(M195IRQWrite) {
+	switch (A & 0xE001) {
+	case 0xC000: M195_irq_counter = V; break;
+	case 0xC001: M195_irq_latch = V; break;
+	case 0xE000: M195_irq_enable = 0; break;
+	case 0xE001: M195_irq_enable = 1; break;
+	}
+	M195_irq_request = 0;
+	MMC3_IRQWrite(A, V);
+}
+
 static void M195Power(void) {
 	M195Log("\n=== NEW RUN: M195Power ===\n");
-	M195_lastA12 = 0;
+	M195_irq_counter = M195_irq_latch = M195_irq_enable = M195_irq_request = 0;
 	GenMMC3Power();
 	memset(CHRRAM, 0, CHRRAMSIZE);	/* VirtuaNES zeroes CRAM/WRAM at boot */
 	memset(WRAM, 0, WRAMSIZE);
 	setprg4r(0x12, 0x5000, 0);
 	SetWriteHandler(0x5000, 0x5fff, M195BW);
 	SetReadHandler(0x5000, 0x5fff, M195BR);
+	SetWriteHandler(0xC000, 0xFFFF, M195IRQWrite);	/* track VirtuaNES-style IRQ regs */
 	/* dump what the fixed banks actually point at */
 	{
 		uint32 mask = PRGmask8[0];
@@ -1218,14 +1236,18 @@ void Mapper195_Init(CartInfo *info) {
 	cwrap = M195CW;
 	info->Power = M195Power;
 	info->Close = M195Close;
-	GameHBIRQHook = M195_HB;	/* diagnostics sampler only (no clocking) */
-	PPU_hook = M195_PPUHook;
+	GameHBIRQHook = M195_HB;	/* VirtuaNES-style scanline IRQ + sampler */
+	PPU_hook = 0;
 	MapIRQHook = M195_MapHook;
 	M195_prgSize = prgbytes;
 	CHRRAMSIZE = 4096;
 	CHRRAM = (uint8*)FCEU_gmalloc(CHRRAMSIZE);
 	SetupCartCHRMapping(0x10, CHRRAM, CHRRAMSIZE, 1);
 	AddExState(CHRRAM, CHRRAMSIZE, 0, "CHRR");
+	AddExState(&M195_irq_counter, 1, 0, "M5IC");
+	AddExState(&M195_irq_latch, 1, 0, "M5IL");
+	AddExState(&M195_irq_enable, 1, 0, "M5IE");
+	AddExState(&M195_irq_request, 1, 0, "M5IR");
 	M195_XRAM = (uint8*)FCEU_gmalloc(0x1000);
 	memset(M195_XRAM, 0, 0x1000);
 	SetupCartPRGMapping(0x12, M195_XRAM, 0x1000, 1);
