@@ -1096,6 +1096,15 @@ static void M195CW(uint32 A, uint8 V) {
 		setchr1r(0, A, V);
 }
 
+static void M195PW(uint32 A, uint8 V) {
+	/* full 8-bit bank number: GENPWRAP truncates to 7 bits (V & 0x7F),
+	   which would land the fixed banks (0xFE/0xFF) on 126/127 instead of
+	   the real last banks 158/159 (game.nes) or 190/191 (game2.nes);
+	   setprg8r still applies PRGmask8 derived from the actual PRG size.
+	   Same approach as Mapper198's M198PW. */
+	setprg8(A, V);
+}
+
 static void M195Power(void) {
 	GenMMC3Power();
 	setprg4r(0x12, 0x5000, 0);
@@ -1116,6 +1125,7 @@ void Mapper195_Init(CartInfo *info) {
 	if (prgkb < 512)
 		prgkb = 512;	/* fallback to standard FS303 if size unknown */
 	GenMMC3_Init(info, prgkb, 256, 16, info->battery);
+	pwrap = M195PW;
 	cwrap = M195CW;
 	info->Power = M195Power;
 	info->Close = M195Close;
