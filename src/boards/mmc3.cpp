@@ -1136,21 +1136,17 @@ static DECLFW(M195BW) {
 
 /* --- Mapper195 IRQ: exact port of VirtuaNESex Mapper195::HSync ---
    scanline counter gated on display-on, scanlines 0-239 only, with its
-   own simplified counter/latch (no MMC3 reload semantics). fceux's MMC3
-   IRQ structures (ClockMMC3Counter etc.) have different reload/timing
-   behavior that hangs this game's IRQ-driven init inside its handler. */
+   own simplified counter/latch (no MMC3 reload semantics). The clock is
+   driven from MapIRQHook's scanline detector so it is NOT subject to
+   fceux's GameHBIRQHook gating ((PPU[0] & 0x38) != 0x18) which silently
+   disables the IRQ for certain pattern-table settings. */
 static uint8 M195_irq_counter = 0, M195_irq_latch = 0;
 static uint8 M195_irq_enable = 0, M195_irq_request = 0;
+static int M195_lastScan = -1;
 
-static void M195_HB(void) {
-	/* diagnostics sampler (cheap, keep while debugging) */
-	static int hb = 0;
-	hb++;
-	if (!(hb % 1310)) M195Log("HB %d PC=%04X PPUon=%d ScreenON=%d en=%d cnt=%d latch=%d\n",
-		hb, X.PC, PPU[0] & 0x18, (int)(PPU[1] & 0x18), M195_irq_enable, M195_irq_counter, M195_irq_latch);
-
+static void M195_HBClock(void) {
 	if (scanline < 0 || scanline > 239) return;
-	if (!(PPU[0] & 0x18)) return;	/* display off */
+	if (!(PPU[1] & 0x18)) return;	/* display off (VirtuaNES: IsDispON) */
 	if (!M195_irq_enable || M195_irq_request) return;
 
 	if (scanline == 0) {
@@ -1167,6 +1163,11 @@ static void M195_HB(void) {
 static void M195_MapHook(int a) {
 	static uint32 ic = 0;
 	static uint16 lastBlk = 0xFFFF;
+	/* scanline detector: clock the VirtuaNES-style IRQ once per scanline */
+	if (scanline != M195_lastScan) {
+		M195_lastScan = scanline;
+		M195_HBClock();
+	}
 	ic++;
 	uint16 blk = X.PC & 0xFF00;
 	if (blk != lastBlk) {
@@ -1247,7 +1248,7 @@ void Mapper195_Init(CartInfo *info) {
 	cwrap = M195CW;
 	info->Power = M195Power;
 	info->Close = M195Close;
-	GameHBIRQHook = M195_HB;	/* VirtuaNES-style scanline IRQ + sampler */
+	/* IRQ clocked from MapIRQHook scanline detector (VirtuaNES style) */
 	PPU_hook = 0;
 	MapIRQHook = M195_MapHook;
 	M195_prgSize = prgbytes;
