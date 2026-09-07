@@ -1095,7 +1095,7 @@ static uint32 M195_prgSize = 0;	/* actual PRG bytes, for diagnostics */
 static FILE *M195_dbg = NULL;
 static int M195_dbgn = 0;
 static void M195Log(const char *fmt, ...) {
-	if (M195_dbgn > 8000) return;
+	if (M195_dbgn > 30000) return;
 	if (!M195_dbg) M195_dbg = fopen("fceux195_debug.log", "ab");
 	if (!M195_dbg) return;
 	{ va_list ap; va_start(ap, fmt); vfprintf(M195_dbg, fmt, ap); va_end(ap); }
@@ -1104,7 +1104,7 @@ static void M195Log(const char *fmt, ...) {
 }
 
 static void M195CW(uint32 A, uint8 V) {
-	if (M195_dbgn < 600) M195Log("CHR A=%04X V=%02X\n", A, V);
+	if (M195_dbgn < 2000) M195Log("CHR A=%04X V=%02X\n", A, V);
 	if (V <= 3)
 		setchr1r(0x10, A, V);
 	else
@@ -1112,18 +1112,25 @@ static void M195CW(uint32 A, uint8 V) {
 }
 
 static void M195PW(uint32 A, uint8 V) {
-	if (M195_dbgn < 600) M195Log("PRG A=%04X V=%02X\n", A, V);
+	if (M195_dbgn < 2000) M195Log("PRG A=%04X V=%02X\n", A, V);
 	setprg8(A, V);
 }
 
 static DECLFR(M195BR) {
-	if (M195_dbgn < 1000) M195Log("R5 %04X\n", A);
+	if (M195_dbgn < 1500 || !(M195_dbgn % 100)) M195Log("R5 %04X\n", A);
 	return CartBR(A);
 }
 
 static DECLFW(M195BW) {
-	if (M195_dbgn < 1000) M195Log("W5 %04X=%02X\n", A, V);
+	if (M195_dbgn < 1500 || !(M195_dbgn % 100)) M195Log("W5 %04X=%02X\n", A, V);
 	CartBW(A, V);
+}
+
+static void M195_CPUHook(X6502 *xp) {
+	static uint32 icount = 0;
+	icount++;
+	if (!(icount % 30000)) M195Log("CPU %u PC=%04X A=%02X X=%02X Y=%02X SP=%02X P=%02X\n",
+		icount, xp->PC, xp->A, xp->X, xp->Y, xp->S, xp->P);
 }
 
 static void M195_HB(void) {
@@ -1136,6 +1143,7 @@ static void M195_HB(void) {
 
 static void M195Power(void) {
 	M195Log("\n=== NEW RUN: M195Power ===\n");
+	X6502_Debug(M195_CPUHook, 0, 0);
 	GenMMC3Power();
 	memset(CHRRAM, 0, CHRRAMSIZE);	/* VirtuaNES zeroes CRAM/WRAM at boot */
 	memset(WRAM, 0, WRAMSIZE);
