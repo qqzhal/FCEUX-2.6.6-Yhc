@@ -1075,29 +1075,12 @@ void Mapper194_Init(CartInfo *info) {
 }
 
 // ---------------------------- Mapper 195 -------------------------------
-// Waixing FS303: MMC3 clone whose GAL dynamically maps CHR banks to RAM.
-// The CHR RAM window is driven by the value written to the MMC3 command
-// port ($8000): bits 7-6 select the first CHR ROM page mirrored into CHR
-// RAM, bit 5 selects a 2KB (1) or 4KB (0) window. The mirrored ROM pages
-// are copied into CHR RAM so the game can patch tiles there.
-// PRG bank mask must use the actual (non power-of-2) PRG size so the
-// fixed banks land on the last real 8KB banks: e.g. the Captain Tsubasa
-// 2 Chinese hacks have 160/192 banks with reset vectors in 158-159/190-191.
-static uint8 M195_window = 0x80;	/* last value written to $8000, power-on $80 */
-
-static void M195UpdateRamWindow(void) {
-	int first = (M195_window & 0xC0) >> 6;
-	int page, pages = (M195_window & 0x20) ? 2 : 4;
-	uint32 chrBytes = VROM_size << 13;
-
-	memset(CHRRAM, 0, CHRRAMSIZE);
-	for (page = 0; page < pages; page++) {
-		uint32 src = (uint32)(first + page) << 10;
-		if (src + 0x400 <= chrBytes)
-			memcpy(CHRRAM + (page << 10), VROM + src, 0x400);
-	}
-}
-
+// Waixing FS303: MMC3 clone. CHR registers <= 3 map to the 4KB CHR RAM,
+// everything else to CHR ROM (same logic as VirtuaNESex's Mapper195,
+// which runs the Captain Tsubasa 2 Chinese hacks correctly). The only
+// non-standard part is the PRG size: those hacks have 160/192 8KB banks,
+// so the bank mask must use the actual PRG size to land the fixed banks
+// on 158/159 (game.nes) or 190/191 (game2.nes) instead of 62/63.
 static void M195CW(uint32 A, uint8 V) {
 	if (V <= 3)	// Crystalis (c).nes, Captain Tsubasa Vol 2 - Super Striker (C)
 		setchr1r(0x10, A, V);
@@ -1105,22 +1088,11 @@ static void M195CW(uint32 A, uint8 V) {
 		setchr1r(0, A, V);
 }
 
-static DECLFW(M195CMDWrite) {
-	if ((A & 0xE001) == 0x8000 && M195_window != V) {
-		M195_window = V;
-		M195UpdateRamWindow();
-	}
-	MMC3_CMDWrite(A, V);
-}
-
 static void M195Power(void) {
 	GenMMC3Power();
-	M195_window = 0x80;
-	M195UpdateRamWindow();
 	setprg4r(0x10, 0x5000, 2);
 	SetWriteHandler(0x5000, 0x5fff, CartBW);
 	SetReadHandler(0x5000, 0x5fff, CartBR);
-	SetWriteHandler(0x8000, 0xBFFF, M195CMDWrite);	/* intercept $8000 for CHR RAM window */
 }
 
 void Mapper195_Init(CartInfo *info) {
@@ -1134,7 +1106,6 @@ void Mapper195_Init(CartInfo *info) {
 	CHRRAM = (uint8*)FCEU_gmalloc(CHRRAMSIZE);
 	SetupCartCHRMapping(0x10, CHRRAM, CHRRAMSIZE, 1);
 	AddExState(CHRRAM, CHRRAMSIZE, 0, "CHRR");
-	AddExState(&M195_window, 1, 0, "M195W");
 }
 
 // ---------------------------- Mapper 196 -------------------------------
