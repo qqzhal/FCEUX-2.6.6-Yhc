@@ -1133,6 +1133,18 @@ static void M195_HB(void) {
 		hb, X.PC, PPU[0] & 0x18, IRQa, IRQCount, IRQLatch);
 }
 
+static void M195_MapHook(int a) {
+	static uint32 ic = 0;
+	ic++;
+	if (ic < 20000) {
+		if (!(ic % 250)) M195Log("I %u PC=%04X A=%02X
+", ic, X.PC, X.A);
+	} else if (!(ic % 100000)) {
+		M195Log("I %u PC=%04X A=%02X
+", ic, X.PC, X.A);
+	}
+}
+
 /* Standard MMC3 IRQ: clock the counter on the PPU A12 rising edge
    (CHR fetches crossing $0FFF/$1000). fceux's GameHBIRQHook is gated by
    (PPU[0] & 0x38) != 0x18 in ppu.cpp, so with certain pattern-table
@@ -1210,6 +1222,7 @@ void Mapper195_Init(CartInfo *info) {
 	info->Close = M195Close;
 	GameHBIRQHook = M195_HB;	/* diagnostics sampler only (no clocking) */
 	PPU_hook = M195_PPUHook;
+	MapIRQHook = M195_MapHook;
 	M195_prgSize = prgbytes;
 	CHRRAMSIZE = 4096;
 	CHRRAM = (uint8*)FCEU_gmalloc(CHRRAMSIZE);
