@@ -1095,7 +1095,7 @@ static uint32 M195_prgSize = 0;	/* actual PRG bytes, for diagnostics */
 static FILE *M195_dbg = NULL;
 static int M195_dbgn = 0;
 static void M195Log(const char *fmt, ...) {
-	if (M195_dbgn > 30000) return;
+	if (M195_dbgn > 40000) return;
 	if (!M195_dbg) M195_dbg = fopen("fceux195_debug.log", "ab");
 	if (!M195_dbg) return;
 	{ va_list ap; va_start(ap, fmt); vfprintf(M195_dbg, fmt, ap); va_end(ap); }
@@ -1104,7 +1104,7 @@ static void M195Log(const char *fmt, ...) {
 }
 
 static void M195CW(uint32 A, uint8 V) {
-	if (M195_dbgn < 2000) M195Log("CHR A=%04X V=%02X\n", A, V);
+	if (M195_dbgn < 3000) M195Log("CHR A=%04X V=%02X PC=%04X\n", A, V, X.PC);
 	if (V <= 3)
 		setchr1r(0x10, A, V);
 	else
@@ -1112,25 +1112,25 @@ static void M195CW(uint32 A, uint8 V) {
 }
 
 static void M195PW(uint32 A, uint8 V) {
-	if (M195_dbgn < 2000) M195Log("PRG A=%04X V=%02X\n", A, V);
+	if (M195_dbgn < 4000) M195Log("PRG A=%04X V=%02X PC=%04X\n", A, V, X.PC);
 	setprg8(A, V);
 }
 
 static DECLFR(M195BR) {
-	if (M195_dbgn < 1500 || !(M195_dbgn % 100)) M195Log("R5 %04X\n", A);
+	if (M195_dbgn < 1500 || !(M195_dbgn % 400)) M195Log("R5 %04X PC=%04X\n", A, X.PC);
 	return CartBR(A);
 }
 
 static DECLFW(M195BW) {
-	if (M195_dbgn < 1500 || !(M195_dbgn % 100)) M195Log("W5 %04X=%02X\n", A, V);
+	if (M195_dbgn < 1500 || !(M195_dbgn % 400)) M195Log("W5 %04X=%02X PC=%04X\n", A, V, X.PC);
 	CartBW(A, V);
 }
 
 static void M195_HB(void) {
 	static int hb = 0;
-	if (!(hb % 6000)) M195Log("HB %d PC=%04X PPUon=%d\n", hb, X.PC, PPU[0] & 0x18);
 	hb++;
-	MMC3_hb();
+	if (!(hb % 1310)) M195Log("HB %d PC=%04X PPUon=%d IRQa=%d cnt=%d latch=%d\n",
+		hb, X.PC, PPU[0] & 0x18, IRQa, IRQCount, IRQLatch);
 }
 
 /* Standard MMC3 IRQ: clock the counter on the PPU A12 rising edge
@@ -1208,7 +1208,7 @@ void Mapper195_Init(CartInfo *info) {
 	cwrap = M195CW;
 	info->Power = M195Power;
 	info->Close = M195Close;
-	GameHBIRQHook = 0;	/* IRQ clocked via PPU A12 hook instead */
+	GameHBIRQHook = M195_HB;	/* diagnostics sampler only (no clocking) */
 	PPU_hook = M195_PPUHook;
 	M195_prgSize = prgbytes;
 	CHRRAMSIZE = 4096;
