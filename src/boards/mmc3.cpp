@@ -1146,11 +1146,13 @@ static void M195DLog(const char *fmt, ...) {
 static void M195Samp(int dummy) {
 	(void)dummy;
 	M195_ic++;
-	if (!(M195_ic % 400000)) {
-		M195DLog("I %llu PC=%04X PPU0=%02X PPU1=%02X sc=%d IRQa=%d cnt=%d lat=%d cmd=%02X D=%02X%02X%02X%02X%02X%02X\n",
-			(unsigned long long)M195_ic, X.PC, PPU[0], PPU[1], scanline,
+	if (!(M195_ic % 100000)) {
+		M195DLog("I %llu PC=%04X A=%02X X=%02X Y=%02X S=%02X P=%02X IRQl=%08X sc=%d PPU=%02X/%02X IRQ=%d/%d/%d cmd=%02X D=%02X%02X%02X%02X%02X%02X r8D=%02X w7E9C=%02X r643=%02X\n",
+			(unsigned long long)M195_ic, X.PC, X.A, X.X, X.Y, X.S, X.P,
+			X.IRQlow, scanline, PPU[0], PPU[1],
 			IRQa, IRQCount, IRQLatch, MMC3_cmd,
-			DRegBuf[0], DRegBuf[1], DRegBuf[2], DRegBuf[3], DRegBuf[4], DRegBuf[5]);
+			DRegBuf[0], DRegBuf[1], DRegBuf[2], DRegBuf[3], DRegBuf[4], DRegBuf[5],
+			RAM[0x8D], WRAM ? WRAM[0x1E9C] : 0, RAM[0x643]);
 	}
 }
 static void M195HB(void) {
