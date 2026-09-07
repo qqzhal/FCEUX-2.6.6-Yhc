@@ -1126,24 +1126,35 @@ static DECLFW(M195BW) {
 	CartBW(A, V);
 }
 
-static void M195_CPUHook(X6502 *xp) {
-	static uint32 icount = 0;
-	icount++;
-	if (!(icount % 30000)) M195Log("CPU %u PC=%04X A=%02X X=%02X Y=%02X SP=%02X P=%02X\n",
-		icount, xp->PC, xp->A, xp->X, xp->Y, xp->S, xp->P);
-}
-
 static void M195_HB(void) {
 	static int hb = 0;
 	if (!(hb % 6000)) M195Log("HB %d PC=%04X PPUon=%d\n", hb, X.PC, PPU[0] & 0x18);
 	hb++;
 	MMC3_hb();
 }
+
+/* Standard MMC3 IRQ: clock the counter on the PPU A12 rising edge
+   (CHR fetches crossing $0FFF/$1000). fceux's GameHBIRQHook is gated by
+   (PPU[0] & 0x38) != 0x18 in ppu.cpp, so with certain pattern-table
+   settings it never fires and games waiting for the IRQ hang on a black
+   screen; the A12 hook matches the real hardware instead. */
+static int M195_lastA12 = 0;
+static void M195_PPUHook(uint32 A) {
+	if (A < 0x2000) {
+		int a12 = (A >> 12) & 1;
+		if (a12 && !M195_lastA12)
+			ClockMMC3Counter();
+		M195_lastA12 = a12;
+	}
+	static uint32 ph = 0;
+	if (!(++ph % 200000)) M195Log("PPU %u PC=%04X IRQa=%d cnt=%d latch=%d PPUon=%d\n",
+		ph, X.PC, IRQa, IRQCount, IRQLatch, PPU[0] & 0x18);
+}
 /* ---- end diagnostics ---- */
 
 static void M195Power(void) {
 	M195Log("\n=== NEW RUN: M195Power ===\n");
-	X6502_Debug(M195_CPUHook, 0, 0);
+	M195_lastA12 = 0;
 	GenMMC3Power();
 	memset(CHRRAM, 0, CHRRAMSIZE);	/* VirtuaNES zeroes CRAM/WRAM at boot */
 	memset(WRAM, 0, WRAMSIZE);
@@ -1197,7 +1208,8 @@ void Mapper195_Init(CartInfo *info) {
 	cwrap = M195CW;
 	info->Power = M195Power;
 	info->Close = M195Close;
-	GameHBIRQHook = M195_HB;
+	GameHBIRQHook = 0;	/* IRQ clocked via PPU A12 hook instead */
+	PPU_hook = M195_PPUHook;
 	M195_prgSize = prgbytes;
 	CHRRAMSIZE = 4096;
 	CHRRAM = (uint8*)FCEU_gmalloc(CHRRAMSIZE);
