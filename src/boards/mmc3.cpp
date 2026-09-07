@@ -1087,6 +1087,11 @@ void Mapper194_Init(CartInfo *info) {
 // which runs these ROMs.
 static uint8 *M195_XRAM = NULL;
 static FILE *M195_diag = NULL;	/* TEMP gray-screen diagnostics */
+/* VirtuaNESex Mapper195 IRQ state: C000 loads the counter, C001 loads the
+   latch, and a request flag prevents re-trigger until the next register
+   write.  This differs from FCEUX's generic MMC3 IRQ (C000=latch). */
+static uint8 M195_irqEn = 0;
+static uint8 M195_irqReq = 0;
 
 static void M195CW(uint32 A, uint8 V) {
 	if (V <= 3)	// Crystalis (c).nes, Captain Tsubasa Vol 2 - Super Striker (C)
@@ -1103,6 +1108,8 @@ static void M195PW(uint32 A, uint8 V) {
 	setprg8(A, V);
 }
 
+void M195IRQWrite(uint32 A, uint8 V);
+
 static void M195Power(void) {
 	GenMMC3Power();
 	/* GenMMC3Power left KT008HackWrite on $5000-$5FFF; replace it with
@@ -1110,8 +1117,41 @@ static void M195Power(void) {
 	SetWriteHandler(0x5000, 0x5fff, CartBW);
 	SetReadHandler(0x5000, 0x5fff, CartBR);
 	setprg4r(0x11, 0x5000, 0);
+	/* VirtuaNESex register semantics for the mapper IRQ. */
+	SetWriteHandler(0xC000, 0xFFFF, M195IRQWrite);
 	memset(M195_XRAM, 0, 0x1000);
 	memset(CHRRAM, 0, CHRRAMSIZE);
+	M195_irqEn = 0;
+	M195_irqReq = 0;
+}
+
+static void M195Reset(void) {
+	MMC3RegReset();
+	M195_irqEn = 0;
+	M195_irqReq = 0;
+	X6502_IRQEnd(FCEU_IQEXT);
+}
+
+static DECLFW(M195IRQWrite) {
+	switch (A & 0xE001) {
+	case 0xC000: IRQCount = V; M195_irqReq = 0; break;	/* counter */
+	case 0xC001: IRQLatch = V; M195_irqReq = 0; break;	/* latch */
+	case 0xE000: M195_irqEn = 0; M195_irqReq = 0;
+		X6502_IRQEnd(FCEU_IQEXT); break;
+	case 0xE001: M195_irqEn = 1; M195_irqReq = 0; break;
+	}
+}
+
+/* A000 mirroring, VirtuaNESex Mapper195: 0=V, 1=H, 2=one-screen $2000,
+   3=one-screen $2400. */
+static void M195MWRAP(uint8 V) {
+	A000B = V;
+	switch (V & 3) {
+	case 0: setmirror(MI_V); break;
+	case 1: setmirror(MI_H); break;
+	case 2: setmirror(MI_0); break;
+	default: setmirror(MI_1); break;
+	}
 }
 
 static void M195Close(void) {
@@ -1156,12 +1196,23 @@ static void M195Samp(int dummy) {
 	}
 }
 static void M195HB(void) {
-	ClockMMC3Counter();
 	M195_hbN++;
+	if (scanline >= 0 && scanline <= 239 && (PPU[1] & 0x18) &&
+	    M195_irqEn && !M195_irqReq) {
+		if (scanline == 0 && IRQCount) IRQCount--;
+		if (!(IRQCount--)) {
+			M195_irqReq = 1;
+			IRQCount = IRQLatch;
+			X6502_IRQBegin(FCEU_IQEXT);
+			if (!(M195_hbN % 262))
+				M195DLog("IRQFIRE hb=%d PC=%04X cnt=%d lat=%d sc=%d PPU=%02X/%02X\n",
+					M195_hbN, X.PC, IRQCount, IRQLatch, scanline, PPU[0], PPU[1]);
+		}
+	}
 	if (!(M195_hbN % 262)) {
 		M195DLog("HB %d PC=%04X PPU0=%02X PPU1=%02X sc=%d IRQa=%d cnt=%d lat=%d cmd=%02X\n",
 			M195_hbN, X.PC, PPU[0], PPU[1], scanline,
-			IRQa, IRQCount, IRQLatch, MMC3_cmd);
+			M195_irqEn, IRQCount, IRQLatch, MMC3_cmd);
 	}
 }
 /* ---- end TEMP DIAGNOSTICS ---- */
@@ -1192,7 +1243,9 @@ void Mapper195_Init(CartInfo *info) {
 
 	pwrap = M195PW;
 	cwrap = M195CW;
+	mwrap = M195MWRAP;
 	info->Power = M195Power;
+	info->Reset = M195Reset;
 	info->Close = M195Close;
 	GameHBIRQHook = M195HB;
 	MapIRQHook = M195Samp;
