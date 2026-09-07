@@ -1075,6 +1075,18 @@ void Mapper194_Init(CartInfo *info) {
 }
 
 // ---------------------------- Mapper 195 -------------------------------
+// Waixing FS303 variant used by the Captain Tsubasa 2 Chinese releases:
+// an MMC3 clone with
+//   - full 8-bit PRG bank numbers over the real ROM size
+//     (game.nes: 160 x 8KB banks, game2.nes: 192 x 8KB banks);
+//   - 4KB CHR RAM behind the 1KB CHR pages 0..3;
+//   - an independent 4KB PRG-RAM at $5000-$5FFF (second half of bank $42);
+//   - 8KB WRAM at $6000-$7FFF (bank $43) already supplied by GenMMC3_Init.
+// Together the two RAM windows are the 12KB region the ROM fills at reset
+// and executes its patched code from.  This mirrors VirtuaNESex's Mapper195,
+// which runs these ROMs.
+static uint8 *M195_XRAM = NULL;
+
 static void M195CW(uint32 A, uint8 V) {
 	if (V <= 3)	// Crystalis (c).nes, Captain Tsubasa Vol 2 - Super Striker (C)
 		setchr1r(0x10, A, V);
@@ -1082,21 +1094,69 @@ static void M195CW(uint32 A, uint8 V) {
 		setchr1r(0, A, V);
 }
 
+/* MMC3's default GENPWRAP truncates PRG bank numbers to 7 bits
+   (V & 0x7F).  FS303 needs the full 8-bit value: the fixed banks are
+   $9E/$9F on game.nes (158/159) and $BE/$BF on game2.nes (190/191).
+   PRGmask8[0] below then wraps the value to the real ROM size. */
+static void M195PW(uint32 A, uint8 V) {
+	setprg8(A, V);
+}
+
 static void M195Power(void) {
 	GenMMC3Power();
-	setprg4r(0x10, 0x5000, 2);
+	/* GenMMC3Power left KT008HackWrite on $5000-$5FFF; replace it with
+	   plain RAM handlers backed by M195_XRAM. */
 	SetWriteHandler(0x5000, 0x5fff, CartBW);
 	SetReadHandler(0x5000, 0x5fff, CartBR);
+	setprg4r(0x11, 0x5000, 0);
+	memset(M195_XRAM, 0, 0x1000);
+	memset(CHRRAM, 0, CHRRAMSIZE);
+}
+
+static void M195Close(void) {
+	if (M195_XRAM) {
+		FCEU_gfree(M195_XRAM);
+		M195_XRAM = NULL;
+	}
+	GenMMC3Close();
 }
 
 void Mapper195_Init(CartInfo *info) {
+	int prgbytes;
+
+	/* iNES 1.0 keeps PRGRomSize uppow2-padded, so derive the real PRG size
+	   from the file layout: total file size (16-byte header already removed)
+	   minus the CHR ROM. */
+	if (info->totalFileSize >= (uint64)VROM_size * 8192)
+		prgbytes = (int)(info->totalFileSize - (uint64)VROM_size * 8192);
+	else
+		prgbytes = 0;
+	if (prgbytes < 512 * 1024 || (prgbytes & 0x3FFF)) {
+		/* Implausible or not 16KB-aligned: fall back to the header value. */
+		prgbytes = info->PRGRomSize;
+	}
+
 	GenMMC3_Init(info, 512, 256, 16, info->battery);
+
+	/* GenMMC3_Init's own mask arithmetic assumes a power-of-two byte count
+	   and leaves the padded mask in place; clamp it to the real ROM here.
+	   (bytes >> 13) - 1 == number of 8KB banks - 1. */
+	PRGmask8[0] &= (prgbytes >> 13) - 1;
+	PRGmask16[0] &= (prgbytes >> 14) - 1;
+	PRGmask32[0] &= (prgbytes >> 15) - 1;
+
+	pwrap = M195PW;
 	cwrap = M195CW;
 	info->Power = M195Power;
+	info->Close = M195Close;
 	CHRRAMSIZE = 4096;
 	CHRRAM = (uint8*)FCEU_gmalloc(CHRRAMSIZE);
 	SetupCartCHRMapping(0x10, CHRRAM, CHRRAMSIZE, 1);
 	AddExState(CHRRAM, CHRRAMSIZE, 0, "CHRR");
+
+	M195_XRAM = (uint8*)FCEU_gmalloc(0x1000);
+	SetupCartPRGMapping(0x11, M195_XRAM, 0x1000, 1);
+	AddExState(M195_XRAM, 0x1000, 0, "M5KX");
 }
 
 // ---------------------------- Mapper 196 -------------------------------

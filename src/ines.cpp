@@ -531,7 +531,7 @@ typedef struct {
 // to something more unified for ines 2.0 specific
 static int not_power2[] =
 {
-	53, 198, 228, 547
+	53, 195, 198, 228, 547
 };
 
 BMAPPINGLocal bmap[] = {
