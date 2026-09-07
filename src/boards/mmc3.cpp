@@ -1095,7 +1095,7 @@ static uint32 M195_prgSize = 0;	/* actual PRG bytes, for diagnostics */
 static FILE *M195_dbg = NULL;
 static int M195_dbgn = 0;
 static void M195Log(const char *fmt, ...) {
-	if (M195_dbgn > 40000) return;
+	if (M195_dbgn > 80000) return;
 	if (!M195_dbg) M195_dbg = fopen("fceux195_debug.log", "ab");
 	if (!M195_dbg) return;
 	{ va_list ap; va_start(ap, fmt); vfprintf(M195_dbg, fmt, ap); va_end(ap); }
@@ -1103,26 +1103,34 @@ static void M195Log(const char *fmt, ...) {
 	fflush(M195_dbg);
 }
 
+static int M195_chrlog = 0;
 static void M195CW(uint32 A, uint8 V) {
-	if (M195_dbgn < 3000) M195Log("CHR A=%04X V=%02X PC=%04X\n", A, V, X.PC);
+	if (M195_chrlog < 1000 || !(M195_chrlog % 20)) M195Log("CHR A=%04X V=%02X PC=%04X\n", A, V, X.PC);
+	M195_chrlog++;
 	if (V <= 3)
 		setchr1r(0x10, A, V);
 	else
 		setchr1r(0, A, V);
 }
 
+static int M195_prglog = 0;
 static void M195PW(uint32 A, uint8 V) {
-	if (M195_dbgn < 4000) M195Log("PRG A=%04X V=%02X PC=%04X\n", A, V, X.PC);
+	if (M195_prglog < 4000 || !(M195_prglog % 20)) M195Log("PRG A=%04X V=%02X PC=%04X\n", A, V, X.PC);
+	M195_prglog++;
 	setprg8(A, V);
 }
 
 static DECLFR(M195BR) {
-	if (M195_dbgn < 1500 || !(M195_dbgn % 400)) M195Log("R5 %04X PC=%04X\n", A, X.PC);
+	static int r5n = 0;
+	if (r5n < 2000 || !(r5n % 200)) M195Log("R5 %04X PC=%04X\n", A, X.PC);
+	r5n++;
 	return CartBR(A);
 }
 
 static DECLFW(M195BW) {
-	if (M195_dbgn < 1500 || !(M195_dbgn % 400)) M195Log("W5 %04X=%02X PC=%04X\n", A, V, X.PC);
+	static int w5n = 0;
+	if (w5n < 2000 || !(w5n % 200)) M195Log("W5 %04X=%02X PC=%04X\n", A, V, X.PC);
+	w5n++;
 	CartBW(A, V);
 }
 
@@ -1138,8 +1146,8 @@ static void M195_HB(void) {
 	/* diagnostics sampler (cheap, keep while debugging) */
 	static int hb = 0;
 	hb++;
-	if (!(hb % 1310)) M195Log("HB %d PC=%04X PPUon=%d en=%d cnt=%d latch=%d\n",
-		hb, X.PC, PPU[0] & 0x18, M195_irq_enable, M195_irq_counter, M195_irq_latch);
+	if (!(hb % 1310)) M195Log("HB %d PC=%04X PPUon=%d ScreenON=%d en=%d cnt=%d latch=%d\n",
+		hb, X.PC, PPU[0] & 0x18, (int)ScreenON, M195_irq_enable, M195_irq_counter, M195_irq_latch);
 
 	if (scanline < 0 || scanline > 239) return;
 	if (!(PPU[0] & 0x18)) return;	/* display off */
