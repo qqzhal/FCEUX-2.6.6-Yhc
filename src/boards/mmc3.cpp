@@ -1088,6 +1088,7 @@ void Mapper194_Init(CartInfo *info) {
 // land the fixed banks on 158/159 (game.nes) or 190/191 (game2.nes)
 // instead of 62/63.
 static uint8 *M195_XRAM = NULL;	/* independent 4KB PRG-RAM at $5000-$5FFF */
+static uint32 M195_prgSize = 0;	/* actual PRG bytes, for diagnostics */
 
 /* ---- temporary diagnostics for the CT2 black screen (remove later) ---- */
 #include <stdarg.h>
@@ -1143,14 +1144,12 @@ static void M195Power(void) {
 	SetReadHandler(0x5000, 0x5fff, M195BR);
 	/* dump what the fixed banks actually point at */
 	{
-		uint8 *pC = FCEU_GetPageAddress(0xC000);
-		uint8 *pE = FCEU_GetPageAddress(0xE000);
-		M195Log("mask8=%d ROM=%p C000->%+ld E000->%+ld\n",
-			PRGmask8[0], (void*)ROM,
-			pC ? (long)(pC - ROM) : -1L, pE ? (long)(pE - ROM) : -1L);
-		if (ROM && iNESCart.PRGRomSize >= 16384) {
-			uint32 e = iNESCart.PRGRomSize;
-			M195Log("vectors NMI=%02X%02X RST=%02X%02X IRQ=%02X%02X (PRGRomSize=%u)\n",
+		uint32 mask = PRGmask8[0];
+		M195Log("mask8=%d (fixed banks: C=%u E=%u of %u)\n",
+			mask, 0xFE & mask, 0xFF & mask, mask + 1);
+		if (ROM && M195_prgSize >= 16384) {
+			uint32 e = M195_prgSize;
+			M195Log("vectors NMI=%02X%02X RST=%02X%02X IRQ=%02X%02X (PRG=%u bytes)\n",
 				ROM[e - 6], ROM[e - 5], ROM[e - 4], ROM[e - 3],
 				ROM[e - 2], ROM[e - 1], e);
 		}
@@ -1175,6 +1174,7 @@ void Mapper195_Init(CartInfo *info) {
 	info->Power = M195Power;
 	info->Close = M195Close;
 	GameHBIRQHook = M195_HB;
+	M195_prgSize = info->PRGRomSize;
 	CHRRAMSIZE = 4096;
 	CHRRAM = (uint8*)FCEU_gmalloc(CHRRAMSIZE);
 	SetupCartCHRMapping(0x10, CHRRAM, CHRRAMSIZE, 1);
