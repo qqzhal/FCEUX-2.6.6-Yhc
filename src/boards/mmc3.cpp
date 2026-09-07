@@ -1165,16 +1165,23 @@ static void M195Close(void) {
 }
 
 void Mapper195_Init(CartInfo *info) {
-	int prgkb = info->PRGRomSize >> 10;
-	if (prgkb < 512)
-		prgkb = 512;	/* fallback to standard FS303 if size unknown */
+	/* CartInfo.PRGRomSize holds the power-of-2 padded size for iNES 1.0
+	   (ines.cpp overwrites it from ROM_size right before the CRC32 calc),
+	   so derive the real PRG size from the file layout instead:
+	   file = 16 (header) + [512 trainer] + PRG + CHR. */
+	int prgbytes = (int)(info->totalFileSize - 16 - (uint32)VROM_size * 8192);
+	if (prgbytes < 512 * 1024 || prgbytes > 8192 * 1024 || (prgbytes & 0x3FFF))
+		prgbytes = info->PRGRomSize;	/* implausible: keep header value */
+	if (prgbytes < 512 * 1024)
+		prgbytes = 512 * 1024;	/* fallback to standard FS303 */
+	int prgkb = prgbytes >> 10;
 	GenMMC3_Init(info, prgkb, 256, 16, info->battery);
 	pwrap = M195PW;
 	cwrap = M195CW;
 	info->Power = M195Power;
 	info->Close = M195Close;
 	GameHBIRQHook = M195_HB;
-	M195_prgSize = info->PRGRomSize;
+	M195_prgSize = prgbytes;
 	CHRRAMSIZE = 4096;
 	CHRRAM = (uint8*)FCEU_gmalloc(CHRRAMSIZE);
 	SetupCartCHRMapping(0x10, CHRRAM, CHRRAMSIZE, 1);
@@ -1183,8 +1190,8 @@ void Mapper195_Init(CartInfo *info) {
 	memset(M195_XRAM, 0, 0x1000);
 	SetupCartPRGMapping(0x12, M195_XRAM, 0x1000, 1);
 	AddExState(M195_XRAM, 0x1000, 0, "M5KX");
-	M195Log("=== Mapper195_Init: PRGRomSize=%uKB prgkb=%d ===\n",
-		info->PRGRomSize >> 10, prgkb);
+	M195Log("=== Mapper195_Init: totalFileSize=%u VROM=%dKB prgbytes=%d prgkb=%d ===\n",
+		(unsigned)info->totalFileSize, VROM_size * 8, prgbytes, prgkb);
 }
 
 // ---------------------------- Mapper 196 -------------------------------
