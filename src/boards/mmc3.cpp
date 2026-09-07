@@ -62,6 +62,7 @@ static SFORMAT MMC3_StateRegs[] =
 };
 
 static int isRevB = 1;
+uint32 M195_dbg_clocks = 0;	/* temporary: MMC3 IRQ clock counter for Mapper195 diagnostics */
 
 void (*pwrap)(uint32 A, uint8 V);
 void (*cwrap)(uint32 A, uint8 V);
@@ -261,6 +262,7 @@ DECLFW(KT008HackWrite) {
 
 static void ClockMMC3Counter(void) {
 	int count = IRQCount;
+	M195_dbg_clocks++;
 	if (!count || IRQReload) {
 		IRQCount = IRQLatch;
 		IRQReload = 0;
@@ -1106,7 +1108,7 @@ static int M195_mirror = MI_H;		/* header mirroring (GenMMC3Power defaults to ve
 static FILE *M195_dbg = NULL;
 static int M195_dbgn = 0;
 static void M195Log(const char *fmt, ...) {
-	if (M195_dbgn > 120000) return;
+	if (M195_dbgn > 200000) return;
 	if (!M195_dbg) M195_dbg = fopen("fceux195_debug.log", "ab");
 	if (!M195_dbg) return;
 	{ va_list ap; va_start(ap, fmt); vfprintf(M195_dbg, fmt, ap); va_end(ap); }
@@ -1114,10 +1116,34 @@ static void M195Log(const char *fmt, ...) {
 	if (!(M195_dbgn & 255)) fflush(M195_dbg);
 }
 
+extern uint32 M195_dbg_clocks;
+static int M195_dumping = 0;
+static uint8 M195_dbg_slots[8];
+static void M195_frame_dump(void) {
+	/* called once per frame from the per-instruction hook */
+	uint32 crc = 0;
+	uint16 i;
+	if (CHRRAM) {
+		for (i = 0; i < CHRRAMSIZE; i++) {
+			crc = (crc << 5) + CHRRAM[i] + (crc >> 27);
+		}
+	}
+	M195_dumping = 1;
+	M195Log("FD sl=%d PPU0=%02X PPU1=%02X slots=%02X %02X %02X %02X %02X %02X %02X %02X %02X chrcrc=%04X irqc=%d irql=%d irqa=%d clocks=%u\n",
+		scanline, PPU[0], PPU[1],
+		M195_dbg_slots[0], M195_dbg_slots[1], M195_dbg_slots[2], M195_dbg_slots[3],
+		M195_dbg_slots[4], M195_dbg_slots[5], M195_dbg_slots[6], M195_dbg_slots[7],
+		crc & 0xFFFF, IRQCount, IRQLatch, IRQa, (unsigned)M195_dbg_clocks);
+	M195_dumping = 0;
+}
+
 static void M195CW(uint32 A, uint8 V) {
 	static int clog = 0;
+	static uint8 slots[8] = { 0,1,2,3,4,5,6,7 };
 	if (clog < 300 || !(clog % 50)) M195Log("CHR A=%04X V=%02X PC=%04X sl=%d\n", A, V, X.PC, scanline);
 	clog++;
+	slots[(A >> 10) & 7] = V;
+	if (M195_dumping) memcpy(M195_dbg_slots, slots, 8);
 	if (V <= 3)
 		setchr1r(0x10, A, V);	/* on-board CHR RAM */
 	else
@@ -1149,7 +1175,15 @@ static void M195_MapHook(int a) {
 	static uint32 ic = 0;
 	static uint16 lastBlk = 0xFFFF;
 	static uint8 seen[8192];	/* first-visit bitmap for 256-byte blocks */
+	static int lastSl = -1;
+	static uint8 frames = 0;
 	ic++;
+	/* once per frame: dump CHR slot table + PPU + IRQ state */
+	if (scanline == 0 && lastSl > 0) {
+		if (frames < 40 || !(frames % 30)) M195_frame_dump();
+		frames++;
+	}
+	lastSl = scanline;
 	uint16 blk = X.PC & 0xFF00;
 	if (blk != lastBlk) {
 		lastBlk = blk;
