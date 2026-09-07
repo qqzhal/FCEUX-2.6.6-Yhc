@@ -23,6 +23,6 @@ jobs:
         with:
           name: fceux-win64
           path: |
-            vc/x64/Release/fceux64.exe
+            output64/fceux64.exe
             src/drivers/win/lua/x64/lua5.1.dll
             src/auxlib.lua
