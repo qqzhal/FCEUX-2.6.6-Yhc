@@ -1086,6 +1086,7 @@ void Mapper194_Init(CartInfo *info) {
 // and executes its patched code from.  This mirrors VirtuaNESex's Mapper195,
 // which runs these ROMs.
 static uint8 *M195_XRAM = NULL;
+static FILE *M195_diag = NULL;	/* TEMP gray-screen diagnostics */
 
 static void M195CW(uint32 A, uint8 V) {
 	if (V <= 3)	// Crystalis (c).nes, Captain Tsubasa Vol 2 - Super Striker (C)
@@ -1129,7 +1130,6 @@ static void M195Close(void) {
 
 /* ---- TEMP DIAGNOSTICS (codex/game-nes debugging; remove later) ---- */
 #include <stdarg.h>
-static FILE *M195_diag = NULL;
 static int M195_diagN = 0;
 static uint64 M195_ic = 0;
 static int M195_hbN = 0;
