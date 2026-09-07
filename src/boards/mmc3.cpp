@@ -1118,8 +1118,51 @@ static void M195Close(void) {
 		FCEU_gfree(M195_XRAM);
 		M195_XRAM = NULL;
 	}
+	MapIRQHook = NULL;
+	GameHBIRQHook = NULL;
+	if (M195_diag) {
+		fclose(M195_diag);
+		M195_diag = NULL;
+	}
 	GenMMC3Close();
 }
+
+/* ---- TEMP DIAGNOSTICS (codex/game-nes debugging; remove later) ---- */
+#include <stdarg.h>
+static FILE *M195_diag = NULL;
+static int M195_diagN = 0;
+static uint64 M195_ic = 0;
+static int M195_hbN = 0;
+static void M195DLog(const char *fmt, ...) {
+	if (M195_diagN > 12000) return;
+	if (!M195_diag) return;
+	va_list ap;
+	va_start(ap, fmt);
+	vfprintf(M195_diag, fmt, ap);
+	va_end(ap);
+	M195_diagN++;
+	fflush(M195_diag);
+}
+static void M195Samp(int dummy) {
+	(void)dummy;
+	M195_ic++;
+	if (!(M195_ic % 400000)) {
+		M195DLog("I %llu PC=%04X PPU0=%02X PPU1=%02X sc=%d IRQa=%d cnt=%d lat=%d cmd=%02X D=%02X%02X%02X%02X%02X%02X\n",
+			(unsigned long long)M195_ic, X.PC, PPU[0], PPU[1], scanline,
+			IRQa, IRQCount, IRQLatch, MMC3_cmd,
+			DRegBuf[0], DRegBuf[1], DRegBuf[2], DRegBuf[3], DRegBuf[4], DRegBuf[5]);
+	}
+}
+static void M195HB(void) {
+	ClockMMC3Counter();
+	M195_hbN++;
+	if (!(M195_hbN % 262)) {
+		M195DLog("HB %d PC=%04X PPU0=%02X PPU1=%02X sc=%d IRQa=%d cnt=%d lat=%d cmd=%02X\n",
+			M195_hbN, X.PC, PPU[0], PPU[1], scanline,
+			IRQa, IRQCount, IRQLatch, MMC3_cmd);
+	}
+}
+/* ---- end TEMP DIAGNOSTICS ---- */
 
 void Mapper195_Init(CartInfo *info) {
 	int prgbytes;
@@ -1149,6 +1192,8 @@ void Mapper195_Init(CartInfo *info) {
 	cwrap = M195CW;
 	info->Power = M195Power;
 	info->Close = M195Close;
+	GameHBIRQHook = M195HB;
+	MapIRQHook = M195Samp;
 	CHRRAMSIZE = 4096;
 	CHRRAM = (uint8*)FCEU_gmalloc(CHRRAMSIZE);
 	SetupCartCHRMapping(0x10, CHRRAM, CHRRAMSIZE, 1);
@@ -1157,6 +1202,20 @@ void Mapper195_Init(CartInfo *info) {
 	M195_XRAM = (uint8*)FCEU_gmalloc(0x1000);
 	SetupCartPRGMapping(0x11, M195_XRAM, 0x1000, 1);
 	AddExState(M195_XRAM, 0x1000, 0, "M5KX");
+
+	M195_diag = fopen("m195_diag.log", "w");
+	M195_diagN = 0;
+	if (M195_diag) {
+		M195DLog("INIT prgbytes=%d mask8=%u mask16=%u mask32=%u total=%llu VROM=%u\n",
+			prgbytes, PRGmask8[0], PRGmask16[0], PRGmask32[0],
+			(unsigned long long)info->totalFileSize, VROM_size);
+		if (ROM && prgbytes >= 16384) {
+			unsigned int e = (unsigned int)prgbytes;
+			M195DLog("VEC NMI=%02X%02X RST=%02X%02X IRQ=%02X%02X\n",
+				ROM[e - 6], ROM[e - 5], ROM[e - 4], ROM[e - 3],
+				ROM[e - 2], ROM[e - 1]);
+		}
+	}
 }
 
 // ---------------------------- Mapper 196 -------------------------------
