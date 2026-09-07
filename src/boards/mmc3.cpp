@@ -1166,10 +1166,12 @@ static void M195Close(void) {
 
 void Mapper195_Init(CartInfo *info) {
 	/* CartInfo.PRGRomSize holds the power-of-2 padded size for iNES 1.0
-	   (ines.cpp overwrites it from ROM_size right before the CRC32 calc),
-	   so derive the real PRG size from the file layout instead:
-	   file = 16 (header) + [512 trainer] + PRG + CHR. */
-	int prgbytes = (int)(info->totalFileSize - 16 - (uint32)VROM_size * 8192);
+	   (ines.cpp overwrites it from ROM_size right before the CRC32 calc).
+	   CartInfo.totalFileSize is the file size WITHOUT the 16-byte header
+	   (confirmed by diagnostics: game.nes reports 1572864 = 1572880-16),
+	   so the real PRG size = totalFileSize - CHR (trainer, if any, breaks
+	   16KB alignment and falls back below). */
+	int prgbytes = (int)(info->totalFileSize - (uint32)VROM_size * 8192);
 	if (prgbytes < 512 * 1024 || prgbytes > 8192 * 1024 || (prgbytes & 0x3FFF))
 		prgbytes = info->PRGRomSize;	/* implausible: keep header value */
 	if (prgbytes < 512 * 1024)
