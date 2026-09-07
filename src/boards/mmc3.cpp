@@ -1137,11 +1137,9 @@ static void M195_MapHook(int a) {
 	static uint32 ic = 0;
 	ic++;
 	if (ic < 20000) {
-		if (!(ic % 250)) M195Log("I %u PC=%04X A=%02X
-", ic, X.PC, X.A);
+		if (!(ic % 250)) M195Log("I %u PC=%04X A=%02X\n", ic, X.PC, X.A);
 	} else if (!(ic % 100000)) {
-		M195Log("I %u PC=%04X A=%02X
-", ic, X.PC, X.A);
+		M195Log("I %u PC=%04X A=%02X\n", ic, X.PC, X.A);
 	}
 }
 
