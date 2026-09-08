@@ -1175,46 +1175,6 @@ void Mapper195_Init(CartInfo *info) {
 	AddExState(M195_XRAM, 0x1000, 0, "M5KX");
 }
 
-static void M195Close(void) {
-	if (M195_XRAM) {
-		FCEU_gfree(M195_XRAM);
-		M195_XRAM = NULL;
-	}
-	GenMMC3Close();
-}
-
-void Mapper195_Init(CartInfo *info) {
-	/* CartInfo.PRGRomSize is the power-of-2 padded size for iNES 1.0
-	   (ines.cpp line ~1362 overwrites it from the padded ROM_size AFTER any
-	   earlier fixup), so derive the real PRG size from totalFileSize
-	   (= file size minus the 16-byte header) minus CHR. Trainer bits, if
-	   any, break the 16KB alignment check and fall back below. */
-	int prgbytes = (int)(info->totalFileSize - (uint32)VROM_size * 8192);
-	if (prgbytes < 512 * 1024 || prgbytes > 4096 * 1024 || (prgbytes & 0x3FFF))
-		prgbytes = 512 * 1024;	/* implausible: standard FS303 fallback */
-	M195_prgbanks = prgbytes >> 13;
-	M195_mirror = info->mirror;
-
-	GenMMC3_Init(info, 512, 256, 16, info->battery);
-	/* GenMMC3_Init clamps PRGmask8 to its 512KB parameter; lift it so the
-	   modulo bank numbers from M195PW survive setprg8()'s AND. */
-	PRGmask8[0] = 0xFF;
-	pwrap = M195PW;
-	cwrap = M195CW;
-	info->Power = M195Power;
-	info->Close = M195Close;
-
-	CHRRAMSIZE = 4096;
-	CHRRAM = (uint8*)FCEU_gmalloc(CHRRAMSIZE);
-	SetupCartCHRMapping(0x10, CHRRAM, CHRRAMSIZE, 1);
-	AddExState(CHRRAM, CHRRAMSIZE, 0, "CHRR");
-
-	M195_XRAM = (uint8*)FCEU_gmalloc(0x1000);
-	memset(M195_XRAM, 0, 0x1000);
-	SetupCartPRGMapping(0x12, M195_XRAM, 0x1000, 1);
-	AddExState(M195_XRAM, 0x1000, 0, "M5KX");
-}
-
 // ---------------------------- Mapper 196 -------------------------------
 // MMC3 board with optional command address line connection, allows to
 // make three-four different wirings to IRQ address lines and separately to
