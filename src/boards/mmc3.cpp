@@ -1107,7 +1107,7 @@ static uint32 M195_prgbanks = 64;	/* 8KB PRG bank count (any value, not just pow
 static int M195_mirror = MI_H;		/* header mirroring (GenMMC3Power defaults to vertical) */
 
 static void M195CW(uint32 A, uint8 V) {
-	if (V <= 3)
+	if (V <= 3)	// Crystalis (c).nes, Captain Tsubasa Vol 2 - Super Striker (C)
 		setchr1r(0x10, A, V);	/* on-board CHR RAM */
 	else
 		setchr1r(0, A, V);	/* CHR ROM */
