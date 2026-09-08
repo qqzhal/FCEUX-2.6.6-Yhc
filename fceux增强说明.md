@@ -130,6 +130,9 @@ CHR RAM 窗口）**不需要实现**——"≤3 → RAM"这条简单规则已被
   寄存器/IRQ 状态由 GenMMC3 自带的 `MMC3_StateRegs` 负责，无需额外注册。
 - **镜像**：`GenMMC3Power` 默认 `setmirror(1)`（垂直）；按 header 纠正用
   `info->mirror`（0=水平，MI_H 宏），参考 `Mapper4_Init/M4Power` 的做法。
+- **电池存档时序**：`FCEU_LoadGameSave`（.sav 填回 WRAM）在 iNESLoad 内部、
+  `info->Power()` **之前**执行。Power 里的清零/初始化必须避开 battery 已注册
+  （`mmc3opts & 2`）时的 WRAM，否则会把载入的存档清掉。
 
 ---
 
@@ -267,8 +270,9 @@ static void M195PW(uint32 A, uint8 V) {
 static void M195Power(void) {
 	GenMMC3Power();
 	setmirror(M195_mirror);
-	memset(CHRRAM, 0, CHRRAMSIZE);	/* VirtuaNES zeroes CRAM/WRAM/XRAM at boot */
-	memset(WRAM, 0, WRAMSIZE);
+	memset(CHRRAM, 0, CHRRAMSIZE);	/* VirtuaNES zeroes CRAM/XRAM at boot */
+	if (!(mmc3opts & 2))		/* don't clobber a battery save already loaded into WRAM */
+		memset(WRAM, 0, WRAMSIZE);
 	memset(M195_XRAM, 0, 0x1000);
 	setprg4r(0x12, 0x5000, 0);
 	SetWriteHandler(0x5000, 0x5FFF, CartBW);
@@ -410,6 +414,9 @@ void Mapper195_Init(CartInfo *info) {
    （如日志文件名、注释常量）确认版本；CI 是全新 checkout，无增量缓存问题。
 6. **GAL 查表模型（wiki 版）不需要**：按 §2 的简单规则实现即可，历史上
    曾朝这个方向走弯路。
+7. **Power 里的 memset 会清掉已载入的电池存档**：存档在 Power 之前填进
+   WRAM（§3 电池存档时序），清 WRAM 前必须用 `!(mmc3opts & 2)` 过滤——
+   本组 ROM 无电池没暴露，PR 审查时被发现补上的。
 
 ---
 
