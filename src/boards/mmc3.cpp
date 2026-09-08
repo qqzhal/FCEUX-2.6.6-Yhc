@@ -1126,8 +1126,9 @@ static void M195PW(uint32 A, uint8 V) {
 static void M195Power(void) {
 	GenMMC3Power();
 	setmirror(M195_mirror);
-	memset(CHRRAM, 0, CHRRAMSIZE);	/* VirtuaNES zeroes CRAM/WRAM/XRAM at boot */
-	memset(WRAM, 0, WRAMSIZE);
+	memset(CHRRAM, 0, CHRRAMSIZE);	/* VirtuaNES zeroes CRAM/XRAM at boot */
+	if (!(mmc3opts & 2))		/* don't clobber a battery save already loaded into WRAM */
+		memset(WRAM, 0, WRAMSIZE);
 	memset(M195_XRAM, 0, 0x1000);
 	setprg4r(0x12, 0x5000, 0);
 	SetWriteHandler(0x5000, 0x5FFF, CartBW);
