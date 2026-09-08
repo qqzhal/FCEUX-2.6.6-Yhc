@@ -1143,7 +1143,7 @@ static void M195CW(uint32 A, uint8 V) {
 	if (clog < 300 || !(clog % 50)) M195Log("CHR A=%04X V=%02X PC=%04X sl=%d\n", A, V, X.PC, scanline);
 	clog++;
 	slots[(A >> 10) & 7] = V;
-	if (M195_dumping) memcpy(M195_dbg_slots, slots, 8);
+	memcpy(M195_dbg_slots, slots, 8);
 	if (V <= 3)
 		setchr1r(0x10, A, V);	/* on-board CHR RAM */
 	else
@@ -1182,6 +1182,22 @@ static void M195_MapHook(int a) {
 	if (scanline == 0 && lastSl > 0) {
 		if (frames < 40 || !(frames % 30)) M195_frame_dump();
 		frames++;
+		if (frames == 45) {
+			/* one-shot CHR memory dump: CHRRAM(4K) + CHRROM page 3C + page 08 */
+			FILE *f = fopen("chr_dump.bin", "wb");
+			if (f) {
+				fwrite(M195_dbg_slots, 1, 8, f);
+				if (CHRRAM) fwrite(CHRRAM, 1, 4096, f);
+				{
+					extern uint8 *CHRptr[32];
+					if (CHRptr[0]) {
+						fwrite(CHRptr[0] + 0x3C * 1024, 1, 4096, f);
+						fwrite(CHRptr[0] + 0x08 * 1024, 1, 4096, f);
+					}
+				}
+				fclose(f);
+			}
+		}
 	}
 	lastSl = scanline;
 	uint16 blk = X.PC & 0xFF00;
