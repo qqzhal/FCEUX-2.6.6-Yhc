@@ -1075,28 +1075,105 @@ void Mapper194_Init(CartInfo *info) {
 }
 
 // ---------------------------- Mapper 195 -------------------------------
+// Waixing FS303 / Alien Technology (外星科技): MMC3 clone used by the
+// Captain Tsubasa 2 Chinese versions and their expanded hacks. Verified
+// against VirtuaNESex's Mapper195 and the working web/emu mapper195.js.
+//
+// 1. iNES loading: 195 MUST stay in ines.cpp's not_power2 list. Without
+//    it fceux rounds the PRG read up to the padded power-of-2 size
+//    (2MB for game.nes), so the fread swallows the whole CHR section
+//    into the PRG buffer and the VROM buffer stays 0xFF-filled: the game
+//    logic runs fine (PRG data is intact) but every CHR ROM tile renders
+//    blank. Non-power-of-2 sizes also break fceux's AND-mask bank
+//    mapping: game.nes has 160 (game2.nes 192) 8KB banks, and with the
+//    leftover mask 159 (0x9F) a write of R6=0x42 silently landed on
+//    0x42 & 0x9F = 0x02, so the hacks' 12KB RAM patch layer
+//    ($5000-$7FFF) copied from wrong banks and the game died inside
+//    uninitialized RAM. We lift PRGmask8 to 0xFF and translate bank
+//    numbers in the pwrap hook instead (value % bankCount, like the web
+//    port; FixMMC3PRG passes ~1/~0 for the fixed $C000/$E000 banks,
+//    which become bankCount-2/-1).
+// 2. CHR: register values <= 3 map into a 4KB on-board CHR RAM window
+//    (VirtuaNESex SetBank_PPUSUB); everything else is CHR ROM. The hacks
+//    draw their Chinese font tiles through this RAM.
+// 3. CPU $5000-$5FFF is an independent 4KB PRG-RAM (VirtuaNES XRAM): the
+//    hacks copy their patch layer to $5000-$7FFF, so it must not alias
+//    WRAM or CHR RAM.
+// The scanline IRQ is register-compatible with MMC3; the stock fceux
+// GenMMC3 IRQ (GameHBIRQHook = MMC3_hb, one clock per scanline) works,
+// so no custom IRQ code here.
+static uint8 *M195_XRAM = NULL;		/* 4KB PRG-RAM at $5000-$5FFF */
+static uint32 M195_prgbanks = 64;	/* 8KB PRG bank count (any value, not just powers of 2) */
+static int M195_mirror = MI_H;		/* header mirroring (GenMMC3Power defaults to vertical) */
+
 static void M195CW(uint32 A, uint8 V) {
-	if (V <= 3)	// Crystalis (c).nes, Captain Tsubasa Vol 2 - Super Striker (C)
-		setchr1r(0x10, A, V);
+	if (V <= 3)
+		setchr1r(0x10, A, V);	/* on-board CHR RAM */
 	else
-		setchr1r(0, A, V);
+		setchr1r(0, A, V);	/* CHR ROM */
+}
+
+static void M195PW(uint32 A, uint8 V) {
+	if (V == 0xFE)
+		V = M195_prgbanks - 2;	/* FixMMC3PRG: fixed $C000 bank */
+	else if (V == 0xFF)
+		V = M195_prgbanks - 1;	/* FixMMC3PRG: fixed $E000 bank */
+	else
+		V %= M195_prgbanks;	/* R6/R7 wrap at the real bank count */
+	setprg8(A, V);
 }
 
 static void M195Power(void) {
 	GenMMC3Power();
-	setprg4r(0x10, 0x5000, 2);
-	SetWriteHandler(0x5000, 0x5fff, CartBW);
-	SetReadHandler(0x5000, 0x5fff, CartBR);
+	setmirror(M195_mirror);
+	memset(CHRRAM, 0, CHRRAMSIZE);	/* VirtuaNES zeroes CRAM/XRAM at boot */
+	if (!(mmc3opts & 2))		/* don't clobber a battery save already loaded into WRAM */
+		memset(WRAM, 0, WRAMSIZE);
+	memset(M195_XRAM, 0, 0x1000);
+	setprg4r(0x12, 0x5000, 0);
+	SetWriteHandler(0x5000, 0x5FFF, CartBW);
+	SetReadHandler(0x5000, 0x5FFF, CartBR);
+}
+
+static void M195Close(void) {
+	if (M195_XRAM) {
+		FCEU_gfree(M195_XRAM);
+		M195_XRAM = NULL;
+	}
+	GenMMC3Close();
 }
 
 void Mapper195_Init(CartInfo *info) {
+	/* CartInfo.PRGRomSize is the power-of-2 padded size for iNES 1.0
+	   (ines.cpp overwrites it from the padded ROM_size after board init
+	   would run), so derive the real PRG size from totalFileSize (= file
+	   size minus the 16-byte header) minus CHR. A trainer breaks the
+	   16KB alignment check and falls back below. */
+	int prgbytes = (int)(info->totalFileSize - (uint32)VROM_size * 8192);
+	if (prgbytes < 512 * 1024 || prgbytes > 4096 * 1024 || (prgbytes & 0x3FFF))
+		prgbytes = 512 * 1024;	/* implausible: standard FS303 fallback */
+	M195_prgbanks = prgbytes >> 13;
+	M195_mirror = info->mirror;
+
 	GenMMC3_Init(info, 512, 256, 16, info->battery);
+	/* GenMMC3_Init's mask math cannot express non-power-of-2 sizes; lift
+	   the 8KB mask so the modulo bank numbers from M195PW survive
+	   setprg8()'s AND. */
+	PRGmask8[0] = 0xFF;
+	pwrap = M195PW;
 	cwrap = M195CW;
 	info->Power = M195Power;
+	info->Close = M195Close;
+
 	CHRRAMSIZE = 4096;
 	CHRRAM = (uint8*)FCEU_gmalloc(CHRRAMSIZE);
 	SetupCartCHRMapping(0x10, CHRRAM, CHRRAMSIZE, 1);
 	AddExState(CHRRAM, CHRRAMSIZE, 0, "CHRR");
+
+	M195_XRAM = (uint8*)FCEU_gmalloc(0x1000);
+	memset(M195_XRAM, 0, 0x1000);
+	SetupCartPRGMapping(0x12, M195_XRAM, 0x1000, 1);
+	AddExState(M195_XRAM, 0x1000, 0, "M5KX");
 }
 
 // ---------------------------- Mapper 196 -------------------------------
