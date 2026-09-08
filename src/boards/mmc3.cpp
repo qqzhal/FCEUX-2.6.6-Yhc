@@ -62,7 +62,6 @@ static SFORMAT MMC3_StateRegs[] =
 };
 
 static int isRevB = 1;
-uint32 M195_dbg_clocks = 0;	/* temporary: MMC3 IRQ clock counter for Mapper195 diagnostics */
 
 void (*pwrap)(uint32 A, uint8 V);
 void (*cwrap)(uint32 A, uint8 V);
@@ -262,7 +261,6 @@ DECLFW(KT008HackWrite) {
 
 static void ClockMMC3Counter(void) {
 	int count = IRQCount;
-	M195_dbg_clocks++;
 	if (!count || IRQReload) {
 		IRQCount = IRQLatch;
 		IRQReload = 0;
@@ -1081,15 +1079,20 @@ void Mapper194_Init(CartInfo *info) {
 // Captain Tsubasa 2 Chinese versions and their expanded hacks. Verified
 // against VirtuaNESex's Mapper195 and the working web/emu mapper195.js.
 //
-// 1. PRG: these ROMs have 160 (game.nes) / 192 (game2.nes) 8KB banks -
-//    NOT a power of two. fceux ANDs every bank number with PRGmask8[],
-//    which cannot express those sizes: with mask 159 (0x9F) a write of
-//    0x42 silently lands on 0x42 & 0x9F = 0x02, so the hacks' 12KB RAM
-//    patch layer ($5000-$7FFF) got copied from the wrong banks and the
-//    game crashed inside uninitialized RAM. Lift the mask to 0xFF and do
-//    explicit modulo + fixed-bank substitution in the pwrap hook instead
-//    (the web port uses value % prgCount; FixMMC3PRG passes ~1/~0 for the
-//    fixed $C000/$E000 banks).
+// 1. iNES loading: 195 MUST stay in ines.cpp's not_power2 list. Without
+//    it fceux rounds the PRG read up to the padded power-of-2 size
+//    (2MB for game.nes), so the fread swallows the whole CHR section
+//    into the PRG buffer and the VROM buffer stays 0xFF-filled: the game
+//    logic runs fine (PRG data is intact) but every CHR ROM tile renders
+//    blank. Non-power-of-2 sizes also break fceux's AND-mask bank
+//    mapping: game.nes has 160 (game2.nes 192) 8KB banks, and with the
+//    leftover mask 159 (0x9F) a write of R6=0x42 silently landed on
+//    0x42 & 0x9F = 0x02, so the hacks' 12KB RAM patch layer
+//    ($5000-$7FFF) copied from wrong banks and the game died inside
+//    uninitialized RAM. We lift PRGmask8 to 0xFF and translate bank
+//    numbers in the pwrap hook instead (value % bankCount, like the web
+//    port; FixMMC3PRG passes ~1/~0 for the fixed $C000/$E000 banks,
+//    which become bankCount-2/-1).
 // 2. CHR: register values <= 3 map into a 4KB on-board CHR RAM window
 //    (VirtuaNESex SetBank_PPUSUB); everything else is CHR ROM. The hacks
 //    draw their Chinese font tiles through this RAM.
@@ -1097,53 +1100,13 @@ void Mapper194_Init(CartInfo *info) {
 //    hacks copy their patch layer to $5000-$7FFF, so it must not alias
 //    WRAM or CHR RAM.
 // The scanline IRQ is register-compatible with MMC3; the stock fceux
-// GenMMC3 IRQ (GameHBIRQHook = MMC3_hb) works once the bank mapping is
-// correct, so no custom IRQ code here.
+// GenMMC3 IRQ (GameHBIRQHook = MMC3_hb, one clock per scanline) works,
+// so no custom IRQ code here.
 static uint8 *M195_XRAM = NULL;		/* 4KB PRG-RAM at $5000-$5FFF */
 static uint32 M195_prgbanks = 64;	/* 8KB PRG bank count (any value, not just powers of 2) */
 static int M195_mirror = MI_H;		/* header mirroring (GenMMC3Power defaults to vertical) */
 
-/* ---- temporary diagnostics for the CT2 black screen (remove later) ---- */
-#include <stdarg.h>
-static FILE *M195_dbg = NULL;
-static int M195_dbgn = 0;
-static void M195Log(const char *fmt, ...) {
-	if (M195_dbgn > 200000) return;
-	if (!M195_dbg) M195_dbg = fopen("fceux195_debug.log", "ab");
-	if (!M195_dbg) return;
-	{ va_list ap; va_start(ap, fmt); vfprintf(M195_dbg, fmt, ap); va_end(ap); }
-	M195_dbgn++;
-	if (!(M195_dbgn & 255)) fflush(M195_dbg);
-}
-
-extern uint32 M195_dbg_clocks;
-static int M195_dumping = 0;
-static uint8 M195_dbg_slots[8];
-static void M195_frame_dump(void) {
-	/* called once per frame from the per-instruction hook */
-	uint32 crc = 0;
-	uint16 i;
-	if (CHRRAM) {
-		for (i = 0; i < CHRRAMSIZE; i++) {
-			crc = (crc << 5) + CHRRAM[i] + (crc >> 27);
-		}
-	}
-	M195_dumping = 1;
-	M195Log("FD sl=%d PPU0=%02X PPU1=%02X slots=%02X %02X %02X %02X %02X %02X %02X %02X %02X chrcrc=%04X irqc=%d irql=%d irqa=%d clocks=%u\n",
-		scanline, PPU[0], PPU[1],
-		M195_dbg_slots[0], M195_dbg_slots[1], M195_dbg_slots[2], M195_dbg_slots[3],
-		M195_dbg_slots[4], M195_dbg_slots[5], M195_dbg_slots[6], M195_dbg_slots[7],
-		crc & 0xFFFF, IRQCount, IRQLatch, IRQa, (unsigned)M195_dbg_clocks);
-	M195_dumping = 0;
-}
-
 static void M195CW(uint32 A, uint8 V) {
-	static int clog = 0;
-	static uint8 slots[8] = { 0,1,2,3,4,5,6,7 };
-	if (clog < 300 || !(clog % 50)) M195Log("CHR A=%04X V=%02X PC=%04X sl=%d\n", A, V, X.PC, scanline);
-	clog++;
-	slots[(A >> 10) & 7] = V;
-	memcpy(M195_dbg_slots, slots, 8);
 	if (V <= 3)
 		setchr1r(0x10, A, V);	/* on-board CHR RAM */
 	else
@@ -1151,69 +1114,14 @@ static void M195CW(uint32 A, uint8 V) {
 }
 
 static void M195PW(uint32 A, uint8 V) {
-	static int plog = 0;
-	uint8 old = V;
 	if (V == 0xFE)
 		V = M195_prgbanks - 2;	/* FixMMC3PRG: fixed $C000 bank */
 	else if (V == 0xFF)
 		V = M195_prgbanks - 1;	/* FixMMC3PRG: fixed $E000 bank */
 	else
 		V %= M195_prgbanks;	/* R6/R7 wrap at the real bank count */
-	if (plog < 300 || !(plog % 50)) M195Log("PRG A=%04X %02X->%02X PC=%04X\n", A, old, V, X.PC);
-	plog++;
 	setprg8(A, V);
 }
-
-static DECLFW(M195IRQTrace) {
-	static int ilog = 0;
-	if (ilog < 300 || !(ilog % 50)) M195Log("IRQW A=%04X V=%02X PC=%04X\n", A, V, X.PC);
-	ilog++;
-	MMC3_IRQWrite(A, V);
-}
-
-static void M195_MapHook(int a) {
-	static uint32 ic = 0;
-	static uint16 lastBlk = 0xFFFF;
-	static uint8 seen[8192];	/* first-visit bitmap for 256-byte blocks */
-	static int lastSl = -1;
-	static uint8 frames = 0;
-	ic++;
-	/* once per frame: dump CHR slot table + PPU + IRQ state */
-	if (scanline == 0 && lastSl > 0) {
-		if (frames < 40 || !(frames % 30)) M195_frame_dump();
-		frames++;
-		if (frames == 45) {
-			/* one-shot CHR memory dump: CHRRAM(4K) + CHRROM page 3C + page 08 */
-			FILE *f = fopen("chr_dump.bin", "wb");
-			if (f) {
-				fwrite(M195_dbg_slots, 1, 8, f);
-				if (CHRRAM) fwrite(CHRRAM, 1, 4096, f);
-				{
-					extern uint8 *CHRptr[32];
-					if (CHRptr[0]) {
-						fwrite(CHRptr[0] + 0x3C * 1024, 1, 4096, f);
-						fwrite(CHRptr[0] + 0x08 * 1024, 1, 4096, f);
-					}
-				}
-				fclose(f);
-			}
-		}
-	}
-	lastSl = scanline;
-	uint16 blk = X.PC & 0xFF00;
-	if (blk != lastBlk) {
-		lastBlk = blk;
-		uint32 bi = blk >> 3;
-		if (!(seen[bi >> 3] & (0x80 >> (bi & 7)))) {
-			seen[bi >> 3] |= (0x80 >> (bi & 7));
-			M195Log("K PC=%04X A=%02X sl=%d\n", X.PC, X.A, scanline);
-		}
-	}
-	if (ic == 300000 || ic == 1000000 || ic == 3000000 || ic == 8000000)
-		M195Log("I %u PC=%04X PPU0=%02X PPU1=%02X IRQc=%d IRQl=%d IRQa=%d sl=%d\n", ic, X.PC,
-			PPU[0], PPU[1], IRQCount, IRQLatch, IRQa, scanline);
-}
-/* ---- end diagnostics ---- */
 
 static void M195Power(void) {
 	GenMMC3Power();
@@ -1224,9 +1132,47 @@ static void M195Power(void) {
 	setprg4r(0x12, 0x5000, 0);
 	SetWriteHandler(0x5000, 0x5FFF, CartBW);
 	SetReadHandler(0x5000, 0x5FFF, CartBR);
-	SetWriteHandler(0xC000, 0xFFFF, M195IRQTrace);
-	MapIRQHook = M195_MapHook;
-	M195Log("\n=== NEW RUN: banks=%u mirror=%d ===\n", M195_prgbanks, M195_mirror);
+}
+
+static void M195Close(void) {
+	if (M195_XRAM) {
+		FCEU_gfree(M195_XRAM);
+		M195_XRAM = NULL;
+	}
+	GenMMC3Close();
+}
+
+void Mapper195_Init(CartInfo *info) {
+	/* CartInfo.PRGRomSize is the power-of-2 padded size for iNES 1.0
+	   (ines.cpp overwrites it from the padded ROM_size after board init
+	   would run), so derive the real PRG size from totalFileSize (= file
+	   size minus the 16-byte header) minus CHR. A trainer breaks the
+	   16KB alignment check and falls back below. */
+	int prgbytes = (int)(info->totalFileSize - (uint32)VROM_size * 8192);
+	if (prgbytes < 512 * 1024 || prgbytes > 4096 * 1024 || (prgbytes & 0x3FFF))
+		prgbytes = 512 * 1024;	/* implausible: standard FS303 fallback */
+	M195_prgbanks = prgbytes >> 13;
+	M195_mirror = info->mirror;
+
+	GenMMC3_Init(info, 512, 256, 16, info->battery);
+	/* GenMMC3_Init's mask math cannot express non-power-of-2 sizes; lift
+	   the 8KB mask so the modulo bank numbers from M195PW survive
+	   setprg8()'s AND. */
+	PRGmask8[0] = 0xFF;
+	pwrap = M195PW;
+	cwrap = M195CW;
+	info->Power = M195Power;
+	info->Close = M195Close;
+
+	CHRRAMSIZE = 4096;
+	CHRRAM = (uint8*)FCEU_gmalloc(CHRRAMSIZE);
+	SetupCartCHRMapping(0x10, CHRRAM, CHRRAMSIZE, 1);
+	AddExState(CHRRAM, CHRRAMSIZE, 0, "CHRR");
+
+	M195_XRAM = (uint8*)FCEU_gmalloc(0x1000);
+	memset(M195_XRAM, 0, 0x1000);
+	SetupCartPRGMapping(0x12, M195_XRAM, 0x1000, 1);
+	AddExState(M195_XRAM, 0x1000, 0, "M5KX");
 }
 
 static void M195Close(void) {
