@@ -487,8 +487,8 @@ file/x6502/ppu/全部 boards）与一个 stub 前端链接成 Linux 程序：
   §9.2 全部判据 + 真实 CPU 跑 240 帧的全链路（XRAM 写、bank $42 读回、
   CHR RAM 字库、开显示、帧缓冲有像素）。
 - 附加命令行参数视为真实 ROM：跑 600 帧输出 jam/XBuf/CHR RAM 统计并
-  dump PGM 帧。真实 ROM 存放在私有 release `headless-test-roms`
-  （game.nes / game_hack.nes），CI 用 `github.token` 下载。
+  dump PGM 帧。**该模式仅限本地运行**——游戏 ROM 严禁放进仓库
+  （git/release/artifact 都不许；曾临时传过 release 又撤下）。
 - ppu.cpp 依赖 `emuframework/EmuApp.hh`，由
   `headless-test/stub-include/emuframework/EmuApp.hh` 提供最小替身；
   `FCEUPPU_FrameReady`/`emulateSound` 在 stubs.cc 置空。
